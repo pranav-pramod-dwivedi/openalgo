@@ -103,3 +103,13 @@ def close_all_positions(current_api_key: str = "", auth: str = "") -> Tuple[Dict
     """Close all open positions on Binance Demo."""
     success, resp, status_code = binance_demo_service.close_all_positions()
     return resp, status_code
+
+
+def modify_order(data: Dict[str, Any], auth: str = "") -> Tuple[Dict[str, Any], int]:
+    """Modify order on Binance Demo by cancelling and placing updated order."""
+    orderid = data.get("orderid", "")
+    if orderid:
+        binance_demo_service.cancel_order(orderid)
+    res, resp, new_orderid = place_order_api(data, auth)
+    return resp, 200 if res else 400
+
