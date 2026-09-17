@@ -1,24 +1,38 @@
 import {
   Activity,
-  ArrowRight,
-  ChevronRight,
+  ArrowUpRight,
+  BarChart3,
+  BookOpen,
   Coins,
-  Layers,
-  PiggyBank,
+  ExternalLink,
+  FileText,
+  GraduationCap,
   RefreshCw,
-  TrendingDown,
+  Search,
+  ShieldCheck,
   TrendingUp,
-  Wallet,
   Zap,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
-import { MonetraBarChart } from '@/components/dashboard/MonetraBarChart'
 import DashboardPnLChart from '@/components/dashboard/DashboardPnLChart'
+import { useSocketContext } from '@/components/socket/SocketProvider'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { DataFreshness } from '@/components/ui/data-freshness'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
+
+interface BinanceBalance {
+  asset: string
+  free?: number
+  locked?: number
+  total?: number
+  balance?: number
+  available?: number
+}
 
 interface BinancePosition {
   symbol: string
@@ -41,53 +55,116 @@ interface MarginData {
   futures_wallet_usd?: string
   spot_wallet_usd?: string
   total_balance_usd?: string
+  spot_balances?: BinanceBalance[]
+  futures_balances?: BinanceBalance[]
   positions?: BinancePosition[]
 }
 
-function formatCurrency(value: string | number, isUsd: boolean = true): string {
+interface MasterContractStatus {
+  status: 'pending' | 'downloading' | 'success' | 'error'
+  message?: string
+  total_symbols?: number
+}
+
+// Format number with proper currency and notation (USD vs INR)
+function formatAccountCurrency(value: string | number, isUsd: boolean = false): string {
   const num = typeof value === 'string' ? parseFloat(value) : value
   if (Number.isNaN(num)) return isUsd ? '$0.00' : '₹0.00'
+
   const isNegative = num < 0
   const absNum = Math.abs(num)
   const sym = isUsd ? '$' : '₹'
 
-  const formatted = absNum.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
+  if (isUsd) {
+    const formatted = absNum.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+    return isNegative ? `-${sym}${formatted}` : `${sym}${formatted}`
+  }
+
+  let formatted: string
+  if (absNum >= 10000000) {
+    formatted = `${(absNum / 10000000).toFixed(2)}Cr`
+  } else if (absNum >= 100000) {
+    formatted = `${(absNum / 100000).toFixed(2)}L`
+  } else {
+    formatted = absNum.toFixed(2)
+  }
+
   return isNegative ? `-${sym}${formatted}` : `${sym}${formatted}`
+}
+
+// Get color class based on P&L value
+function getPnLColor(value: string | number): string {
+  const num = typeof value === 'string' ? parseFloat(value) : value
+  if (num > 0) return 'text-green-600 dark:text-green-400'
+  if (num < 0) return 'text-red-600 dark:text-red-400'
+  return 'text-foreground'
+}
+
+function getPnLBadgeVariant(value: string | number): 'default' | 'destructive' | 'secondary' {
+  const num = typeof value === 'string' ? parseFloat(value) : value
+  if (num > 0) return 'default'
+  if (num < 0) return 'destructive'
+  return 'secondary'
 }
 
 export default function Dashboard() {
   const { user } = useAuthStore()
+  const { socket } = useSocketContext()
   const [marginData, setMarginData] = useState<MarginData | null>(null)
+  const username = (user?.username || '').toLowerCase()
+  const isBinance =
+    username.includes('binance') ||
+    user?.broker === 'binance_demo' ||
+    Boolean(marginData?.is_binance)
+  const isUsdSandbox = !isBinance && username.includes('usd')
+  const isIndianSandbox = !isBinance && !isUsdSandbox
+  const isUsd = isBinance || isUsdSandbox
   const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const [isAuthenticated, setIsAuthenticated] = useState(true)
-  const [activeAccountTab, setActiveAccountTab] = useState<'Checking' | 'Savings' | 'Investments'>('Investments')
+  const [masterContract, setMasterContract] = useState<MasterContractStatus>({
+    status: 'pending',
+  })
+  const [isAuthenticated, setIsAuthenticated] = useState(true) // Assume authenticated initially
+  // Broker token revoked/expired while the app session is still valid
+  // (daily token rollover). Routes the user to /broker, not /login (#1400).
+  const [brokerExpired, setBrokerExpired] = useState(false)
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const isBinance = user?.broker === 'binance_demo' || user?.username?.toLowerCase().includes('binance')
-  const isUsdSandbox = user?.username?.toLowerCase().includes('usd')
-  const isUsd = isBinance || isUsdSandbox
-
+  // Fetch dashboard funds data
   const fetchFundsData = useCallback(async () => {
     try {
-      const response = await fetch('/api/funds', {
+      setIsLoading(true)
+      const response = await fetch('/auth/dashboard-data', {
         credentials: 'include',
-        headers: { Accept: 'application/json' },
       })
+
       if (response.status === 401) {
-        setIsAuthenticated(false)
+        const body = await response.json().catch(() => null)
+        if (body?.code === 'BROKER_SESSION_EXPIRED') {
+          setBrokerExpired(true)
+        } else {
+          setIsAuthenticated(false)
+        }
         setIsLoading(false)
         return
       }
+
       const data = await response.json()
+
       if (data.status === 'success' && data.data) {
         setMarginData(data.data)
+        setError(null)
+        setLastUpdated(new Date().toISOString())
+      } else {
+        setError(data.message || 'Failed to fetch margin data')
       }
     } catch (_err) {
-      // ignore
+      setError('Failed to fetch margin data')
     } finally {
       setIsLoading(false)
       setIsRefreshing(false)
@@ -96,6 +173,10 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchFundsData()
+  }, [fetchFundsData])
+
+  // Auto-refresh dashboard every 60s (less aggressive than trading pages)
+  useEffect(() => {
     autoRefreshRef.current = setInterval(() => {
       fetchFundsData()
     }, 60_000)
@@ -104,304 +185,749 @@ export default function Dashboard() {
     }
   }, [fetchFundsData])
 
+  // Refresh funds when an order is placed (via SocketIO event)
   useOrderEventRefresh(fetchFundsData, {
     events: ['order_event', 'analyzer_update', 'close_position_event'],
   })
 
+  // Listen for mode changes and refresh data
   useEffect(() => {
     const unsubscribe = onModeChange(() => {
+      // Refresh funds data when mode changes
       fetchFundsData()
     })
     return () => unsubscribe()
   }, [fetchFundsData])
 
+  // Check master contract status
+  const checkMasterContractStatus = useCallback(async () => {
+    try {
+      const response = await fetch('/api/master-contract/status', {
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+      })
+
+      if (response.status === 401) {
+        return
+      }
+
+      const data = await response.json()
+      setMasterContract(data)
+    } catch (_err) {
+      setMasterContract({ status: 'error', message: 'Failed to check status' })
+    }
+  }, [])
+
+  useEffect(() => {
+    checkMasterContractStatus()
+
+    // Poll every 5 seconds until successful
+    const interval = setInterval(() => {
+      setMasterContract((prev) => {
+        if (prev.status === 'success') {
+          return prev // Don't check again if already successful
+        }
+        checkMasterContractStatus()
+        return prev
+      })
+    }, 5000)
+
+    return () => clearInterval(interval)
+  }, [checkMasterContractStatus])
+
+  // Master Contract LED color
+  const getMasterContractLedColor = () => {
+    switch (masterContract.status) {
+      case 'success':
+        return 'bg-green-500'
+      case 'downloading':
+        return 'bg-yellow-500 animate-pulse'
+      case 'error':
+        return 'bg-red-500'
+      default:
+        return 'bg-gray-400 animate-pulse'
+    }
+  }
+
+  const getMasterContractStatusText = () => {
+    switch (masterContract.status) {
+      case 'success':
+        return masterContract.total_symbols
+          ? `Ready (${masterContract.total_symbols} symbols)`
+          : 'Ready'
+      case 'downloading':
+        return 'Downloading...'
+      case 'error':
+        return 'Error'
+      default:
+        return 'Checking...'
+    }
+  }
+
+  const getMasterContractTextColor = () => {
+    switch (masterContract.status) {
+      case 'success':
+        return 'text-green-600 dark:text-green-400'
+      case 'downloading':
+        return 'text-yellow-600 dark:text-yellow-400'
+      case 'error':
+        return 'text-red-600 dark:text-red-400'
+      default:
+        return 'text-muted-foreground'
+    }
+  }
+
+  const quickAccessCards = [
+    {
+      href: '/search',
+      label: 'OpenAlgo Symbols',
+      description: 'Universal master symbology & tick specs',
+      icon: Search,
+      tag: 'DIRECTORY',
+    },
+    {
+      href: '/logs',
+      label: 'Live Execution Logs',
+      description: 'Real-time order audit trail & event streams',
+      icon: FileText,
+      tag: 'TELEMETRY',
+    },
+    {
+      href: 'https://docs.openalgo.in',
+      label: 'Documentation & API',
+      description: 'REST endpoints, webhooks & Python SDK',
+      icon: BookOpen,
+      tag: 'MANUAL',
+      external: true,
+    },
+    {
+      href: '/pnl-tracker',
+      label: 'Intraday P&L Tracker',
+      description: 'Live mark-to-market performance analytics',
+      icon: BarChart3,
+      tag: 'ANALYTICS',
+    },
+    {
+      href: 'https://www.openalgo.in/learn',
+      label: 'OpenVarsity Academy',
+      description: 'Algorithmic trading models & documentation',
+      icon: GraduationCap,
+      tag: 'EDUCATION',
+      external: true,
+    },
+    {
+      href: '/logs/latency',
+      label: 'Low-Latency Monitor',
+      description: 'Microsecond API & execution roundtrip ping',
+      icon: Zap,
+      tag: 'DIAGNOSTICS',
+    },
+  ]
+
+  // Broker token expired but the app session is fine: send the user to the
+  // broker reconnect flow, not /login (which would bounce back) — #1400.
+  if (brokerExpired) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4">
+        <h1 className="text-2xl font-bold">Broker Session Expired</h1>
+        <p className="text-muted-foreground">
+          Your broker token has expired (brokers roll tokens daily). Reconnect to continue trading.
+        </p>
+        <Link
+          to="/broker"
+          className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          Reconnect Broker
+        </Link>
+      </div>
+    )
+  }
+
+  // If not authenticated, show login prompt
   if (!isAuthenticated) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[50vh] text-center p-6">
+      <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4">
         <h1 className="text-2xl font-bold">Session Expired</h1>
-        <p className="text-muted-foreground mt-2">Please log in to access your portfolio.</p>
-        <Link to="/login" className="mt-4 monetra-btn-primary">
+        <p className="text-muted-foreground">Please log in to access the dashboard.</p>
+        <Link to="/login" className="text-primary hover:underline">
           Go to Login
         </Link>
       </div>
     )
   }
 
-  // Calculate live portfolio values
-  const availableCash = marginData ? marginData.availablecash : (isUsd ? '100.00' : '10000.00')
-
   return (
-    <div className="space-y-6 max-w-5xl mx-auto pb-20">
-      {/* ─────────────────────────────────────────────────────────────
-          UPPER HERO SECTION (Monetra Light Minimalist Architecture)
-          - Credit/Portfolio score style hero
-          - Smooth rounded bar chart
-          - Account type pill selector: [Checking] [Savings] [Investments]
-          ───────────────────────────────────────────────────────────── */}
-      <div className="monetra-card p-6 md:p-8 bg-card relative overflow-hidden">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 text-muted-foreground text-xs font-semibold uppercase tracking-wider">
-              <span>Available Trading Capital</span>
-              <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full text-xs font-bold">
-                <TrendingUp className="h-3 w-3" /> +15.4%
+    <div className="space-y-6 md:space-y-8">
+      {/* Terminal Header & Telemetry */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-border/60">
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-foreground">
+              Trading Terminal
+            </h1>
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-mono font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+              LIVE ENGINE
+            </span>
+          </div>
+          <p className="text-muted-foreground mt-1 text-xs md:text-sm tracking-tight">
+            Real-time portfolio telemetry, market depth & automated execution engine
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Master Contract Status Badge */}
+          <div className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-muted/50 border border-border/60 text-xs">
+            <span className="text-muted-foreground font-medium">Contract:</span>
+            <div className="flex items-center gap-1.5">
+              <div className={cn('w-2 h-2 rounded-full', getMasterContractLedColor())} />
+              <span
+                className={cn('font-mono font-medium', getMasterContractTextColor())}
+                title={masterContract.message}
+              >
+                {getMasterContractStatusText()}
               </span>
             </div>
-            <div className="flex items-baseline gap-3 mt-1.5">
-              <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-foreground">
-                {isLoading ? '...' : formatCurrency(availableCash, isUsd)}
-              </h1>
-              <span className="text-xs font-medium text-muted-foreground">
-                {isBinance ? 'Demo Base ($100)' : 'Active Margin'}
-              </span>
-            </div>
           </div>
 
-          {/* Quick Action Top Right Pill */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                setIsRefreshing(true)
-                fetchFundsData()
-              }}
-              disabled={isRefreshing || isLoading}
-              className="monetra-pill monetra-pill-inactive flex items-center gap-1.5 hover:bg-muted"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", (isRefreshing || isLoading) && "animate-spin")} />
-              <span>Refresh</span>
-            </button>
-            <Link
-              to="/trading"
-              className="monetra-pill monetra-pill-active flex items-center gap-1.5"
-            >
-              <span>Trade Now</span>
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-          </div>
-        </div>
+          <DataFreshness
+            lastUpdated={lastUpdated}
+            isRefreshing={isRefreshing || isLoading}
+            isConnected={socket?.connected}
+          />
 
-        {/* Monetra Bar Chart Visualization */}
-        <div className="mt-4">
-          <MonetraBarChart />
-        </div>
-
-        {/* View Details Banner link */}
-        <div className="mt-4 pt-4 border-t border-border/60 flex items-center justify-between text-sm cursor-pointer hover:opacity-80 transition-opacity">
-          <div className="flex items-center gap-2 font-semibold text-foreground">
-            <div className="w-6 h-6 rounded-lg bg-blue-50 dark:bg-blue-950/50 flex items-center justify-center text-blue-600">
-              <Activity className="h-3.5 w-3.5" />
-            </div>
-            <span>View Full Performance Telemetry</span>
-          </div>
-          <ChevronRight className="h-4 w-4 text-muted-foreground" />
-        </div>
-
-        {/* Segmented Account Pills: Checking / Savings / Investments */}
-        <div className="mt-5 flex items-center gap-2 pt-2">
-          {(['Checking', 'Savings', 'Investments'] as const).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveAccountTab(tab)}
-              className={cn(
-                'monetra-pill flex items-center gap-2 text-xs font-semibold',
-                activeAccountTab === tab
-                  ? 'monetra-pill-active'
-                  : 'monetra-pill-inactive hover:text-foreground'
-              )}
-            >
-              {tab === 'Checking' && <Wallet className="h-3.5 w-3.5" />}
-              {tab === 'Savings' && <PiggyBank className="h-3.5 w-3.5" />}
-              {tab === 'Investments' && <TrendingUp className="h-3.5 w-3.5" />}
-              <span>{tab}</span>
-            </button>
-          ))}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 px-2.5 text-xs font-medium border-border/80 hover:bg-muted/80"
+            onClick={() => {
+              setIsRefreshing(true)
+              fetchFundsData()
+            }}
+            disabled={isRefreshing || isLoading}
+          >
+            <RefreshCw
+              className={cn('h-3.5 w-3.5 mr-1.5', (isRefreshing || isLoading) && 'animate-spin')}
+            />
+            Refresh
+          </Button>
         </div>
       </div>
 
-      {/* ─────────────────────────────────────────────────────────────
-          MIDDLE TIER: Monetra Action Buttons & Calendar Strip
-          - Black quick action buttons: [Add Order] [Track Trades] [Alerts]
-          - Calendar week strip with date circles & status dots
-          ───────────────────────────────────────────────────────────── */}
-      <div className="monetra-card p-6 bg-[#18191D] text-white">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-white/10">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Execution Scheduler
+      {/* Account Switcher & Equity Hero */}
+      <div className="terminal-panel p-3 md:p-4 space-y-3">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          {/* Segmented Market Controls — Swiss Monochrome */}
+          <div className="inline-flex p-1 bg-muted/50 rounded-full border border-border/80">
+            <button
+              type="button"
+              onClick={() => {
+                window.location.href = '/auth/switch-account?account=inr'
+              }}
+              className={cn(
+                'flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer',
+                isIndianSandbox
+                  ? 'bg-foreground text-background font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <span>🇮🇳</span>
+              <span>Indian Markets</span>
+              <span
+                className={cn(
+                  'text-[10px] px-2 py-0.5 rounded-full font-mono font-bold',
+                  isIndianSandbox
+                    ? 'bg-background/20 text-background'
+                    : 'bg-muted text-muted-foreground'
+                )}
+              >
+                {isIndianSandbox && marginData
+                  ? formatAccountCurrency(marginData.availablecash, false)
+                  : '₹10k'}
               </span>
-            </div>
-            <p className="text-base font-bold text-white mt-1">
-              You have <span className="text-blue-400 font-extrabold">{marginData?.positions?.length || 0} active orders</span> running in this cycle
-            </p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                window.location.href = '/auth/switch-account?account=usd'
+              }}
+              className={cn(
+                'flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer',
+                isUsdSandbox
+                  ? 'bg-foreground text-background font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <span>🌐</span>
+              <span>USD Sandbox</span>
+              <span
+                className={cn(
+                  'text-[10px] px-2 py-0.5 rounded-full font-mono font-bold',
+                  isUsdSandbox ? 'bg-background/20 text-background' : 'bg-muted text-muted-foreground'
+                )}
+              >
+                {isUsdSandbox && marginData
+                  ? formatAccountCurrency(marginData.availablecash, true)
+                  : '$100'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                window.location.href = '/auth/switch-account?account=binance'
+              }}
+              className={cn(
+                'flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer',
+                isBinance
+                  ? 'bg-foreground text-background font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <span>🟡</span>
+              <span>Binance Demo</span>
+              <span
+                className={cn(
+                  'text-[10px] px-2 py-0.5 rounded-full font-mono font-bold',
+                  isBinance ? 'bg-background/20 text-background' : 'bg-muted text-muted-foreground'
+                )}
+              >
+                {isBinance && marginData
+                  ? formatAccountCurrency(
+                      marginData.total_balance_usd || marginData.availablecash,
+                      true
+                    )
+                  : '$100'}
+              </span>
+            </button>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Link
-              to="/trading"
-              className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition-all"
-            >
-              <Zap className="h-3.5 w-3.5" />
-              <span>Fast Order</span>
-            </Link>
-            <Link
-              to="/orderbook"
-              className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition-all"
-            >
-              <span>Orderbook</span>
-            </Link>
+          {/* Account Telemetry Status */}
+          <div className="flex items-center gap-3 text-xs font-mono text-muted-foreground flex-wrap">
+            <span className="flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              Active Target:{' '}
+              <strong className="text-foreground font-semibold">
+                {isBinance
+                  ? 'Binance Official Demo (REST API)'
+                  : isUsdSandbox
+                    ? 'Crypto Sandbox (USD)'
+                    : 'Indian Equities (INR)'}
+              </strong>
+            </span>
+            {isBinance && (
+              <>
+                <span className="text-border">|</span>
+                <span>
+                  Base Capital: <strong className="text-emerald-500 font-semibold">$100.00</strong>
+                </span>
+                <span className="text-border">|</span>
+                <span className="text-amber-500/90 font-medium">
+                  15k USDC Collateral Excluded
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 5-Column High-Density Precision Telemetry Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 md:gap-4">
+        {/* Available Balance */}
+        <div className="terminal-panel card-terminal p-4">
+          <div className="flex items-center justify-between text-muted-foreground mb-1">
+            <span className="text-[11px] font-mono uppercase tracking-wider font-semibold">
+              {isBinance ? 'Cash Balance' : 'Available Cash'}
+            </span>
+            <Coins className="h-3.5 w-3.5 text-primary" />
+          </div>
+          <p className="terminal-stat-value text-2xl font-bold text-foreground mt-1">
+            {isLoading
+              ? '—'
+              : marginData
+                ? formatAccountCurrency(marginData.availablecash, isUsd)
+                : isUsd
+                  ? '$100.00'
+                  : '₹0.00'}
+          </p>
+          <div className="mt-2.5 flex items-center gap-1.5">
+            <span className="inline-flex items-center text-[10px] font-mono px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium">
+              {isBinance ? 'Base: $100.00' : 'Unencumbered'}
+            </span>
           </div>
         </div>
 
-        {/* Monetra Horizontal Week Strip */}
-        <div className="pt-5 flex items-center justify-between gap-2 overflow-x-auto">
-          {[
-            { day: 'M', date: '9', icon: null, active: false },
-            { day: 'T', date: '10', icon: '🟢', active: true },
-            { day: 'W', date: '11', icon: '☁️', active: false },
-            { day: 'T', date: '12', icon: null, active: false },
-            { day: 'F', date: '13', icon: null, active: false },
-            { day: 'S', date: '14', icon: null, active: false },
-            { day: 'S', date: '15', icon: '⚡', active: false },
-          ].map((item, idx) => (
-            <div
-              key={idx}
-              className={cn(
-                'flex flex-col items-center gap-2 p-2.5 rounded-2xl min-w-[48px] cursor-pointer transition-all',
-                item.active
-                  ? 'bg-white text-[#18191D] font-bold shadow-md'
-                  : 'text-slate-400 hover:bg-white/5'
-              )}
+        {/* Starting Capital or Collateral */}
+        <div className="terminal-panel card-terminal p-4">
+          <div className="flex items-center justify-between text-muted-foreground mb-1">
+            <span className="text-[11px] font-mono uppercase tracking-wider font-semibold">
+              {isBinance ? 'Starting Capital' : 'Collateral'}
+            </span>
+            <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
+          </div>
+          <p className="terminal-stat-value text-2xl font-bold text-foreground mt-1">
+            {isBinance
+              ? '$100.00'
+              : isLoading
+                ? '—'
+                : marginData
+                  ? formatAccountCurrency(marginData.collateral, isUsd)
+                  : isUsd
+                    ? '$0.00'
+                    : '₹0.00'}
+          </p>
+          <div className="mt-2.5 flex items-center gap-1.5">
+            <span className="inline-flex items-center text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium border border-emerald-500/20">
+              {isBinance ? '15k Collateral Hidden' : 'Secured'}
+            </span>
+          </div>
+        </div>
+
+        {/* Unrealized P&L */}
+        <div className="terminal-panel card-terminal p-4">
+          <div className="flex items-center justify-between text-muted-foreground mb-1">
+            <span className="text-[11px] font-mono uppercase tracking-wider font-semibold">
+              Unrealized MTM
+            </span>
+            <Activity className="h-3.5 w-3.5 text-muted-foreground" />
+          </div>
+          <p
+            className={cn(
+              'terminal-stat-value text-2xl font-bold mt-1',
+              marginData ? getPnLColor(marginData.m2munrealized) : 'text-foreground'
+            )}
+          >
+            {isLoading
+              ? '—'
+              : marginData
+                ? formatAccountCurrency(marginData.m2munrealized, isUsd)
+                : isUsd
+                  ? '$0.00'
+                  : '₹0.00'}
+          </p>
+          <div className="mt-2.5 flex items-center gap-1.5">
+            <Badge
+              variant={marginData ? getPnLBadgeVariant(marginData.m2munrealized) : 'secondary'}
+              className="text-[10px] font-mono h-5 px-1.5 font-medium rounded"
             >
-              <span className="text-[10px] font-semibold">{item.day}</span>
-              <span className="text-sm font-extrabold">{item.date}</span>
-              <div className="w-2 h-2 rounded-full flex items-center justify-center">
-                {item.icon ? (
-                  <span className="text-[10px]">{item.icon}</span>
+              Live Positions
+            </Badge>
+          </div>
+        </div>
+
+        {/* Realized P&L */}
+        <div className="terminal-panel card-terminal p-4">
+          <div className="flex items-center justify-between text-muted-foreground mb-1">
+            <span className="text-[11px] font-mono uppercase tracking-wider font-semibold">
+              Booked P&L
+            </span>
+            <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />
+          </div>
+          <p
+            className={cn(
+              'terminal-stat-value text-2xl font-bold mt-1',
+              marginData ? getPnLColor(marginData.m2mrealized) : 'text-foreground'
+            )}
+          >
+            {isLoading
+              ? '—'
+              : marginData
+                ? formatAccountCurrency(marginData.m2mrealized, isUsd)
+                : isUsd
+                  ? '$0.00'
+                  : '₹0.00'}
+          </p>
+          <div className="mt-2.5 flex items-center gap-1.5">
+            <Badge
+              variant={marginData ? getPnLBadgeVariant(marginData.m2mrealized) : 'secondary'}
+              className="text-[10px] font-mono h-5 px-1.5 font-medium rounded"
+            >
+              Session Closed
+            </Badge>
+          </div>
+        </div>
+
+        {/* Utilised Margin */}
+        <div className="terminal-panel card-terminal p-4 col-span-2 sm:col-span-1">
+          <div className="flex items-center justify-between text-muted-foreground mb-1">
+            <span className="text-[11px] font-mono uppercase tracking-wider font-semibold">
+              Margin Utilised
+            </span>
+            <Zap className="h-3.5 w-3.5 text-cyan-500" />
+          </div>
+          <p className="terminal-stat-value text-2xl font-bold text-foreground mt-1">
+            {isLoading
+              ? '—'
+              : marginData
+                ? formatAccountCurrency(marginData.utiliseddebits, isUsd)
+                : isUsd
+                  ? '$0.00'
+                  : '₹0.00'}
+          </p>
+          <div className="mt-2.5 flex items-center gap-1.5">
+            <span className="inline-flex items-center text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 font-medium border border-cyan-500/20">
+              Active Margin
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Official Binance Live Connection & Portfolio (Shown when Binance Demo is active) */}
+      {isBinance && (
+        <div className="space-y-4 md:space-y-5">
+          {/* Live Connection Banner — Swiss Monochrome */}
+          <div className="terminal-panel p-3.5 md:p-4 border-border bg-card flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-foreground text-sm tracking-tight">
+                    Official Binance Demo Engine Active
+                  </span>
+                  <span className="px-1.5 py-0.2 rounded-sm text-[10px] font-mono font-semibold uppercase tracking-wider bg-muted text-foreground border border-border">
+                    LIVE REST API
+                  </span>
+                </div>
+                <p className="text-[11px] font-mono text-muted-foreground mt-0.5">
+                  Spot: <span className="text-foreground">demo-api.binance.com</span> &bull; Futures:{' '}
+                  <span className="text-foreground">testnet.binancefuture.com</span> &bull; HMAC-SHA256
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <a
+                href="https://demo.binance.com/en-IN/trade"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm bg-background hover:bg-muted border border-border text-foreground transition-colors font-medium text-xs"
+              >
+                <span>Spot Web</span>
+                <ExternalLink className="h-3 w-3" />
+              </a>
+              <a
+                href="https://demo.binance.com/en-IN/futures"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm bg-background hover:bg-muted border border-border text-foreground transition-colors font-medium text-xs"
+              >
+                <span>Futures Web</span>
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+          </div>
+
+          {/* Spot & Futures Wallets Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+            {/* Spot Wallet */}
+            <div className="terminal-panel p-4 space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-border/50">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Coins className="h-4 w-4 text-foreground" />
+                  <span>Spot Demo Assets</span>
+                </div>
+                <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded-sm bg-muted text-foreground border border-border/60">
+                  ${marginData?.spot_usdt || '0.00'} USDT Free
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="p-2 bg-muted/40 rounded border border-border/50 text-center">
+                  <p className="text-[10px] font-mono uppercase text-muted-foreground">USDT Free</p>
+                  <p className="font-mono font-bold text-sm text-foreground mt-0.5">
+                    ${marginData?.spot_usdt || '0.00'}
+                  </p>
+                </div>
+                {marginData?.spot_balances && marginData.spot_balances.length > 0 ? (
+                  marginData.spot_balances.slice(0, 2).map((b, i) => (
+                    <div
+                      key={b.asset || i}
+                      className="p-2 bg-muted/40 rounded border border-border/50 text-center"
+                    >
+                      <p className="text-[10px] font-mono uppercase text-muted-foreground">{b.asset}</p>
+                      <p className="font-mono font-bold text-sm text-foreground mt-0.5">
+                        {typeof b.total === 'number' ? b.total.toFixed(4) : b.free || '0'}
+                      </p>
+                    </div>
+                  ))
                 ) : (
-                  <span className="w-1 h-1 rounded-full bg-slate-600" />
+                  <>
+                    <div className="p-2 bg-muted/40 rounded border border-border/50 text-center">
+                      <p className="text-[10px] font-mono uppercase text-muted-foreground">BTC</p>
+                      <p className="font-mono font-bold text-sm text-foreground mt-0.5">0.0200</p>
+                    </div>
+                    <div className="p-2 bg-muted/40 rounded border border-border/50 text-center">
+                      <p className="text-[10px] font-mono uppercase text-muted-foreground">USDC</p>
+                      <p className="font-mono font-bold text-sm text-foreground mt-0.5">Hidden</p>
+                    </div>
+                  </>
                 )}
               </div>
             </div>
-          ))}
-        </div>
-      </div>
 
-      {/* ─────────────────────────────────────────────────────────────
-          LOWER CONTAINER: Active Positions & Recent Charges List
-          (Replicating Monetra category review & transaction tiles)
-          ───────────────────────────────────────────────────────────── */}
-      <div className="monetra-card p-6 bg-card">
-        {/* Category Review Header Tile */}
-        <Link
-          to="/positions"
-          className="flex items-center justify-between p-4 rounded-2xl bg-muted/50 hover:bg-muted/80 transition-colors border border-border/50"
-        >
-          <div className="flex items-center gap-3">
-            <div className="monetra-icon-tile monetra-icon-blue">
-              <Layers className="h-5 w-5" />
-            </div>
-            <div>
-              <h3 className="font-bold text-sm text-foreground">Active Positions Review</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Review latest fills, unrealized MTM & risk leverage
-              </p>
-            </div>
-          </div>
-          <ChevronRight className="h-4 w-4 text-muted-foreground" />
-        </Link>
-
-        {/* Live Positions / Transactions List */}
-        <div className="mt-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h4 className="font-bold text-base text-foreground">Open Positions</h4>
-            <span className="text-xs font-semibold text-muted-foreground">
-              {marginData?.positions?.length || 0} Open
-            </span>
-          </div>
-
-          {marginData?.positions && marginData.positions.length > 0 ? (
-            <div className="space-y-3">
-              {marginData.positions.map((pos, idx) => {
-                const isLong = pos.side === 'LONG'
-                const isPositive = pos.unrealized_pnl >= 0
-                return (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between p-3.5 rounded-2xl bg-background border border-border/60 hover:shadow-xs transition-all"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className={cn("monetra-icon-tile", isLong ? "monetra-icon-green" : "monetra-icon-pink")}>
-                        {isLong ? <TrendingUp className="h-5 w-5" /> : <TrendingDown className="h-5 w-5" />}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-extrabold text-sm text-foreground">
-                            {pos.symbol}
-                          </span>
-                          <span className={isLong ? "badge-long" : "badge-short"}>
-                            {pos.side}
-                          </span>
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-0.5 font-mono">
-                          Entry: ${pos.entry_price.toFixed(2)} &bull; Mark: ${pos.mark_price.toFixed(2)}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="text-right">
-                      <p className={cn("font-bold text-sm font-mono", isPositive ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400")}>
-                        {isPositive ? `+$${pos.unrealized_pnl.toFixed(2)}` : `-$${Math.abs(pos.unrealized_pnl).toFixed(2)}`}
-                      </p>
-                      <p className="text-[11px] text-muted-foreground font-mono">
-                        Size: {Math.abs(pos.amount)}
-                      </p>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            /* Fallback Replicated Mock Cards matching Monetra reference */
-            <div className="space-y-3">
-              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-background border border-border/60">
-                <div className="flex items-center gap-3">
-                  <div className="monetra-icon-tile monetra-icon-green">
-                    <TrendingUp className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <h5 className="font-bold text-sm text-foreground">BTC/USDT Perpetual</h5>
-                    <p className="text-xs text-muted-foreground">Demo Futures &bull; 10x Leverage</p>
-                  </div>
+            {/* Futures Wallet */}
+            <div className="terminal-panel p-4 space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-border/50">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <TrendingUp className="h-4 w-4 text-emerald-500" />
+                  <span>Futures Testnet Margin</span>
                 </div>
-                <div className="text-right">
-                  <p className="font-bold text-sm text-emerald-600 dark:text-emerald-400 font-mono">+$18.40</p>
-                  <p className="text-[11px] text-muted-foreground font-medium">Unrealized MTM</p>
-                </div>
+                <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded bg-muted">
+                  ${marginData?.futures_usdt || '0.00'} Available
+                </span>
               </div>
-
-              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-background border border-border/60">
-                <div className="flex items-center gap-3">
-                  <div className="monetra-icon-tile monetra-icon-blue">
-                    <Coins className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <h5 className="font-bold text-sm text-foreground">ETH/USDT Spot</h5>
-                    <p className="text-xs text-muted-foreground">Cash Balance Demo</p>
-                  </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="p-2 bg-muted/40 rounded border border-border/50 text-center">
+                  <p className="text-[10px] font-mono uppercase text-muted-foreground">Futures Margin</p>
+                  <p className="font-mono font-bold text-sm text-foreground mt-0.5">
+                    ${marginData?.futures_usdt || '0.00'}
+                  </p>
                 </div>
-                <div className="text-right">
-                  <p className="font-bold text-sm text-foreground font-mono">$100.00</p>
-                  <p className="text-[11px] text-muted-foreground font-medium">Spot Wallet</p>
+                <div className="p-2 bg-muted/40 rounded border border-border/50 text-center">
+                  <p className="text-[10px] font-mono uppercase text-muted-foreground">Starting Base</p>
+                  <p className="font-mono font-bold text-sm text-emerald-500 mt-0.5">$100.00</p>
                 </div>
               </div>
             </div>
-          )}
+          </div>
+
+          {/* Active Live Positions on Binance Futures */}
+          <div className="terminal-panel overflow-hidden">
+            <div className="p-3.5 border-b border-border/60 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                <Activity className="h-4 w-4 text-primary" />
+                <span>Live Futures Positions</span>
+              </div>
+              <span className="font-mono text-xs px-2 py-0.5 rounded bg-muted font-medium">
+                {marginData?.positions?.length ?? 0} Active Position{(marginData?.positions?.length ?? 0) !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="text-[11px] font-mono uppercase text-muted-foreground bg-muted/40 border-b border-border/60">
+                  <tr>
+                    <th className="py-2.5 px-3.5 font-medium">Symbol</th>
+                    <th className="py-2.5 px-3.5 font-medium">Side</th>
+                    <th className="py-2.5 px-3.5 font-medium">Quantity</th>
+                    <th className="py-2.5 px-3.5 font-medium">Entry Price</th>
+                    <th className="py-2.5 px-3.5 font-medium">Mark Price</th>
+                    <th className="py-2.5 px-3.5 font-medium text-right">Unrealized P&L</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/60">
+                  {marginData?.positions && marginData.positions.length > 0 ? (
+                    marginData.positions.map((p, idx) => (
+                      <tr
+                        key={idx}
+                        className="hover:bg-muted/30 transition-colors font-mono"
+                      >
+                        <td className="py-3 px-3.5 font-semibold text-foreground">{p.symbol}</td>
+                        <td className="py-3 px-3.5">
+                          {p.side === 'LONG' ? (
+                            <span className="badge-long">▲ LONG</span>
+                          ) : (
+                            <span className="badge-short">▼ SHORT</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3.5">{Math.abs(p.amount)}</td>
+                        <td className="py-3 px-3.5">${p.entry_price.toFixed(2)}</td>
+                        <td className="py-3 px-3.5">${p.mark_price.toFixed(2)}</td>
+                        <td className={cn('py-3 px-3.5 text-right font-bold', getPnLColor(p.unrealized_pnl))}>
+                          {p.unrealized_pnl >= 0
+                            ? `+$${p.unrealized_pnl.toFixed(4)}`
+                            : `-$${Math.abs(p.unrealized_pnl).toFixed(4)}`}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className="py-6 text-center text-muted-foreground font-mono"
+                      >
+                        No active futures positions open
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Intraday PnL Graph */}
+      <DashboardPnLChart />
+
+      {/* Error Alert */}
+      {error && (
+        <div className="terminal-panel p-4 border-destructive/40 bg-destructive/5">
+          <p className="text-destructive text-sm font-medium">{error}</p>
+        </div>
+      )}
+
+      {/* Quick Access Tools — Editorial Command Grid */}
+      <div className="space-y-3 pt-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base md:text-lg font-bold tracking-tight text-foreground">
+            Platform Modules
+          </h2>
+          <span className="text-xs font-mono text-muted-foreground uppercase">
+            Fast Execution Commands
+          </span>
         </div>
 
-        {/* Intraday Chart Component */}
-        <div className="mt-8 pt-6 border-t border-border/60">
-          <DashboardPnLChart />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
+          {quickAccessCards.map((card) => {
+            const cardClasses =
+              'terminal-panel card-terminal block p-4 group transition-all duration-150'
+
+            const cardContent = (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="p-2 rounded-md bg-muted/60 border border-border/50 text-foreground group-hover:text-primary transition-colors">
+                    <card.icon className="h-4 w-4" />
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold tracking-wider text-muted-foreground bg-muted">
+                      {card.tag}
+                    </span>
+                    <ArrowUpRight className="h-3.5 w-3.5 text-muted-foreground group-hover:text-foreground group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all" />
+                  </div>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-sm tracking-tight text-foreground group-hover:text-primary transition-colors">
+                    {card.label}
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                    {card.description}
+                  </p>
+                </div>
+              </div>
+            )
+
+            if (card.external) {
+              return (
+                <a
+                  key={card.href}
+                  href={card.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={cardClasses}
+                >
+                  {cardContent}
+                </a>
+              )
+            }
+
+            return (
+              <Link key={card.href} to={card.href} className={cardClasses}>
+                {cardContent}
+              </Link>
+            )
+          })}
         </div>
       </div>
     </div>
