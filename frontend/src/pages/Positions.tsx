@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi } from '@/api/trading'
+import { useSocketContext } from '@/components/socket/SocketProvider'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -31,6 +32,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { DataFreshness } from '@/components/ui/data-freshness'
 import {
   Dialog,
   DialogContent,
@@ -40,6 +42,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Label } from '@/components/ui/label'
 import {
   Table,
@@ -59,7 +62,6 @@ import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Position } from '@/types/trading'
 import { showToast } from '@/utils/toast'
-import { EmptyState } from '@/components/ui/empty-state'
 
 const STORAGE_KEY = 'openalgo_positions_prefs'
 
@@ -150,12 +152,17 @@ const PRODUCT_COLORS: Record<string, string> = {
 export default function Positions() {
   const { apiKey, user } = useAuthStore()
   const { isCrypto } = useSupportedExchanges()
+  const { socket } = useSocketContext()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [positions, setPositions] = useState<Position[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showStaleWarning, setShowStaleWarning] = useState(false)
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null)
+
+  // Auto-refresh every 30s for fresh data even without socket events
+  const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Page visibility tracking for resource optimization
   const { isVisible, wasHidden, timeSinceHidden } = usePageVisibility()
@@ -227,6 +234,7 @@ export default function Positions() {
         if (response.status === 'success' && response.data) {
           setPositions(response.data)
           setError(null)
+          setLastUpdated(new Date().toISOString())
         } else {
           setError(response.message || 'Failed to fetch positions')
         }
@@ -249,6 +257,16 @@ export default function Positions() {
     fetchPositions()
     lastFetchRef.current = Date.now()
   }, [fetchPositions, isVisible])
+
+  // Auto-refresh every 30s to keep data fresh when no events fire
+  useEffect(() => {
+    autoRefreshRef.current = setInterval(() => {
+      fetchPositions()
+    }, 30_000)
+    return () => {
+      if (autoRefreshRef.current) clearInterval(autoRefreshRef.current)
+    }
+  }, [fetchPositions])
 
   // Refresh on order events instead of polling
   useOrderEventRefresh(fetchPositions, {
@@ -625,6 +643,12 @@ export default function Positions() {
                 Live
               </Badge>
             ) : null}
+            <DataFreshness
+              lastUpdated={lastUpdated}
+              isRefreshing={isRefreshing}
+              isConnected={socket?.connected}
+              className="ml-2"
+            />
           </div>
           <p className="text-muted-foreground">Monitor and manage your active trading positions</p>
         </div>
@@ -871,16 +895,24 @@ export default function Positions() {
               <Loader2 className="h-8 w-8 animate-spin" />
             </div>
           ) : error ? (
-            <div className="text-center py-12 text-muted-foreground">{error}</div>
+            <div className="text-center py-12 space-y-3">
+              <p className="text-muted-foreground">{error}</p>
+              <Button variant="outline" size="sm" onClick={() => fetchPositions(true)}>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Retry
+              </Button>
+            </div>
           ) : filteredPositions.length === 0 ? (
             <EmptyState
               icon={ChartCandlestick}
               title="No positions match your filters"
               description="Try adjusting or clearing your filters to see results."
-              action={hasActiveFilters ?
-                <Button variant="ghost" size="sm" onClick={clearFilters}>
-                  Clear Filters
-                </Button> : undefined
+              action={
+                hasActiveFilters ? (
+                  <Button variant="ghost" size="sm" onClick={clearFilters}>
+                    Clear Filters
+                  </Button>
+                ) : undefined
               }
             />
           ) : (

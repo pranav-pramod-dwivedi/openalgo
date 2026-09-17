@@ -8,11 +8,13 @@ import {
   TrendingDown,
   TrendingUp,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi } from '@/api/trading'
+import { useSocketContext } from '@/components/socket/SocketProvider'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { DataFreshness } from '@/components/ui/data-freshness'
 import {
   Dialog,
   DialogContent,
@@ -101,11 +103,16 @@ function formatTime(timestamp: string): string {
 export default function TradeBook() {
   const { apiKey, user } = useAuthStore()
   const { isCrypto } = useSupportedExchanges()
+  const { socket } = useSocketContext()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [trades, setTrades] = useState<Trade[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null)
+
+  // Auto-refresh every 30s for fresh data even without socket events
+  const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Filter state
   const [filters, setFilters] = useState<FilterState>({
@@ -188,6 +195,7 @@ export default function TradeBook() {
         if (response.status === 'success' && response.data) {
           setTrades(response.data)
           setError(null)
+          setLastUpdated(new Date().toISOString())
         } else {
           setError(response.message || 'Failed to fetch trades')
         }
@@ -203,6 +211,16 @@ export default function TradeBook() {
 
   useEffect(() => {
     fetchTrades()
+  }, [fetchTrades])
+
+  // Auto-refresh every 30s to keep data fresh when no events fire
+  useEffect(() => {
+    autoRefreshRef.current = setInterval(() => {
+      fetchTrades()
+    }, 30_000)
+    return () => {
+      if (autoRefreshRef.current) clearInterval(autoRefreshRef.current)
+    }
   }, [fetchTrades])
 
   // Refresh on order events instead of polling
@@ -245,7 +263,13 @@ export default function TradeBook() {
         sanitizeCSV(t.quantity),
         sanitizeCSV(t.average_price),
         sanitizeCSV(t.trade_value),
-        sanitizeCSV(t.money_change !== undefined ? t.money_change : (t.action === 'BUY' ? -t.trade_value : t.trade_value)),
+        sanitizeCSV(
+          t.money_change !== undefined
+            ? t.money_change
+            : t.action === 'BUY'
+              ? -t.trade_value
+              : t.trade_value
+        ),
         sanitizeCSV(t.orderid),
         sanitizeCSV(t.timestamp),
       ])
@@ -298,10 +322,17 @@ export default function TradeBook() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Trade Book</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold tracking-tight">Trade Book</h1>
+          </div>
           <p className="text-muted-foreground">View your executed trades</p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
+          <DataFreshness
+            lastUpdated={lastUpdated}
+            isRefreshing={isRefreshing}
+            isConnected={socket?.connected}
+          />
           {/* Settings Button */}
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
             <DialogTrigger asChild>
@@ -477,7 +508,13 @@ export default function TradeBook() {
               <Loader2 className="h-8 w-8 animate-spin" />
             </div>
           ) : error ? (
-            <div className="text-center py-12 text-muted-foreground">{error}</div>
+            <div className="text-center py-12 space-y-3">
+              <p className="text-muted-foreground">{error}</p>
+              <Button variant="outline" size="sm" onClick={() => fetchTrades(true)}>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Retry
+              </Button>
+            </div>
           ) : sortedAndFilteredTrades.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               {hasActiveFilters ? (
@@ -581,9 +618,12 @@ export default function TradeBook() {
                       </TableCell>
                       <TableCell className="text-right font-mono">
                         {(() => {
-                          const val = trade.money_change !== undefined
-                            ? Number(trade.money_change)
-                            : (trade.action === 'BUY' ? -Number(trade.trade_value) : Number(trade.trade_value))
+                          const val =
+                            trade.money_change !== undefined
+                              ? Number(trade.money_change)
+                              : trade.action === 'BUY'
+                                ? -Number(trade.trade_value)
+                                : Number(trade.trade_value)
                           const isPositive = val > 0
                           const isNegative = val < 0
                           return (
@@ -602,11 +642,16 @@ export default function TradeBook() {
                                 {formatCurrency(val)}
                               </span>
                               {trade.pnl !== undefined && Number(trade.pnl) !== 0 && (
-                                <span className={cn(
-                                  'text-[10px] font-medium leading-none mt-0.5',
-                                  Number(trade.pnl) > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'
-                                )}>
-                                  P&L: {Number(trade.pnl) > 0 ? '+' : ''}{formatCurrency(trade.pnl)}
+                                <span
+                                  className={cn(
+                                    'text-[10px] font-medium leading-none mt-0.5',
+                                    Number(trade.pnl) > 0
+                                      ? 'text-emerald-600 dark:text-emerald-400'
+                                      : 'text-rose-500'
+                                  )}
+                                >
+                                  P&L: {Number(trade.pnl) > 0 ? '+' : ''}
+                                  {formatCurrency(trade.pnl)}
                                 </span>
                               )}
                             </div>

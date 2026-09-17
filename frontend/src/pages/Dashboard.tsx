@@ -5,15 +5,19 @@ import {
   ExternalLink,
   FileText,
   GraduationCap,
+  RefreshCw,
   Search,
   TrendingUp,
   Zap,
 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import DashboardPnLChart from '@/components/dashboard/DashboardPnLChart'
+import { useSocketContext } from '@/components/socket/SocketProvider'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { DataFreshness } from '@/components/ui/data-freshness'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
@@ -70,7 +74,10 @@ function formatAccountCurrency(value: string | number, isUsd: boolean = false): 
   const sym = isUsd ? '$' : '₹'
 
   if (isUsd) {
-    const formatted = absNum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    const formatted = absNum.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
     return isNegative ? `-${sym}${formatted}` : `${sym}${formatted}`
   }
 
@@ -103,14 +110,20 @@ function getPnLBadgeVariant(value: string | number): 'default' | 'destructive' |
 
 export default function Dashboard() {
   const { user } = useAuthStore()
+  const { socket } = useSocketContext()
   const [marginData, setMarginData] = useState<MarginData | null>(null)
   const username = (user?.username || '').toLowerCase()
-  const isBinance = username.includes('binance') || user?.broker === 'binance_demo' || Boolean(marginData?.is_binance)
+  const isBinance =
+    username.includes('binance') ||
+    user?.broker === 'binance_demo' ||
+    Boolean(marginData?.is_binance)
   const isUsdSandbox = !isBinance && username.includes('usd')
   const isIndianSandbox = !isBinance && !isUsdSandbox
   const isUsd = isBinance || isUsdSandbox
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [masterContract, setMasterContract] = useState<MasterContractStatus>({
     status: 'pending',
   })
@@ -118,6 +131,7 @@ export default function Dashboard() {
   // Broker token revoked/expired while the app session is still valid
   // (daily token rollover). Routes the user to /broker, not /login (#1400).
   const [brokerExpired, setBrokerExpired] = useState(false)
+  const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Fetch dashboard funds data
   const fetchFundsData = useCallback(async () => {
@@ -143,6 +157,7 @@ export default function Dashboard() {
       if (data.status === 'success' && data.data) {
         setMarginData(data.data)
         setError(null)
+        setLastUpdated(new Date().toISOString())
       } else {
         setError(data.message || 'Failed to fetch margin data')
       }
@@ -150,11 +165,22 @@ export default function Dashboard() {
       setError('Failed to fetch margin data')
     } finally {
       setIsLoading(false)
+      setIsRefreshing(false)
     }
   }, [])
 
   useEffect(() => {
     fetchFundsData()
+  }, [fetchFundsData])
+
+  // Auto-refresh dashboard every 60s (less aggressive than trading pages)
+  useEffect(() => {
+    autoRefreshRef.current = setInterval(() => {
+      fetchFundsData()
+    }, 60_000)
+    return () => {
+      if (autoRefreshRef.current) clearInterval(autoRefreshRef.current)
+    }
   }, [fetchFundsData])
 
   // Refresh funds when an order is placed (via SocketIO event)
@@ -358,6 +384,27 @@ export default function Dashboard() {
             Overview of your trading account and market positions
           </p>
         </div>
+        <div className="flex items-center gap-3 flex-wrap lg:ml-auto lg:self-start">
+          <DataFreshness
+            lastUpdated={lastUpdated}
+            isRefreshing={isRefreshing || isLoading}
+            isConnected={socket?.connected}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setIsRefreshing(true)
+              fetchFundsData()
+            }}
+            disabled={isRefreshing || isLoading}
+          >
+            <RefreshCw
+              className={cn('h-4 w-4 mr-2', (isRefreshing || isLoading) && 'animate-spin')}
+            />
+            Refresh
+          </Button>
+        </div>
         {/* Master Contract Status Indicator */}
         <div className="flex items-center gap-2 md:gap-3 bg-muted rounded-lg px-3 md:px-4 py-2 md:py-3 w-fit lg:ml-auto lg:self-start">
           <span className="text-xs md:text-sm font-medium whitespace-nowrap">Master Contract:</span>
@@ -400,7 +447,9 @@ export default function Dashboard() {
                   : 'bg-muted text-muted-foreground'
               )}
             >
-              {isIndianSandbox && marginData ? formatAccountCurrency(marginData.availablecash, false) : '₹10,000'}
+              {isIndianSandbox && marginData
+                ? formatAccountCurrency(marginData.availablecash, false)
+                : '₹10,000'}
             </span>
           </button>
           <button
@@ -423,7 +472,9 @@ export default function Dashboard() {
                 isUsdSandbox ? 'bg-white/20 text-white' : 'bg-muted text-muted-foreground'
               )}
             >
-              {isUsdSandbox && marginData ? formatAccountCurrency(marginData.availablecash, true) : '$100.59'}
+              {isUsdSandbox && marginData
+                ? formatAccountCurrency(marginData.availablecash, true)
+                : '$100.59'}
             </span>
           </button>
           <button
@@ -446,7 +497,12 @@ export default function Dashboard() {
                 isBinance ? 'bg-black/20 text-black' : 'bg-muted text-muted-foreground'
               )}
             >
-              {isBinance && marginData ? formatAccountCurrency(marginData.total_balance_usd || marginData.availablecash, true) : '$100.00'}
+              {isBinance && marginData
+                ? formatAccountCurrency(
+                    marginData.total_balance_usd || marginData.availablecash,
+                    true
+                  )
+                : '$100.00'}
             </span>
           </button>
         </div>
@@ -458,14 +514,17 @@ export default function Dashboard() {
               {isBinance
                 ? '🟡 Official Binance Demo (Spot & Futures REST API)'
                 : isUsdSandbox
-                ? '🌐 Forex & Crypto Sandbox ($ USD - openalgo_usd)'
-                : '🇮🇳 Indian Equities & F&O Sandbox (₹ INR - openalgo_admin)'}
+                  ? '🌐 Forex & Crypto Sandbox ($ USD - openalgo_usd)'
+                  : '🇮🇳 Indian Equities & F&O Sandbox (₹ INR - openalgo_admin)'}
             </span>
           </div>
           {isBinance && (
             <div className="flex items-center gap-3 font-mono text-xs flex-wrap">
               <span>
-                Account Equity: <strong className="text-foreground">${marginData?.total_balance_usd || '100.00'}</strong>
+                Account Equity:{' '}
+                <strong className="text-foreground">
+                  ${marginData?.total_balance_usd || '100.00'}
+                </strong>
               </span>
               <span className="text-muted-foreground hidden sm:inline">|</span>
               <span>
@@ -499,9 +558,7 @@ export default function Dashboard() {
                       : '₹0.00'}
               </p>
               <Badge variant="secondary" className="mt-2">
-                {isBinance
-                  ? 'Base: $100.00'
-                  : 'Cash Balance'}
+                {isBinance ? 'Base: $100.00' : 'Cash Balance'}
               </Badge>
             </div>
           </CardContent>
@@ -513,9 +570,7 @@ export default function Dashboard() {
             <CardContent className="pt-6">
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Starting Capital</p>
-                <p className="text-2xl font-bold text-violet-500 dark:text-violet-400">
-                  $100.00
-                </p>
+                <p className="text-2xl font-bold text-violet-500 dark:text-violet-400">$100.00</p>
                 <Badge variant="secondary" className="mt-2 text-xs">
                   15k USDC Collateral Hidden
                 </Badge>
@@ -642,12 +697,18 @@ export default function Dashboard() {
                   <span className="font-semibold text-foreground text-base">
                     Official Binance Demo Connected via Live REST API
                   </span>
-                  <Badge variant="outline" className="border-amber-500 text-amber-600 dark:text-amber-400 font-mono text-xs">
+                  <Badge
+                    variant="outline"
+                    className="border-amber-500 text-amber-600 dark:text-amber-400 font-mono text-xs"
+                  >
                     Non-Simulated
                   </Badge>
                 </div>
                 <p className="text-xs md:text-sm text-muted-foreground mt-0.5">
-                  Spot: <code className="font-mono text-foreground">demo-api.binance.com</code> &bull; Futures: <code className="font-mono text-foreground">testnet.binancefuture.com</code> &bull; HMAC-SHA256 Signed
+                  Spot: <code className="font-mono text-foreground">demo-api.binance.com</code>{' '}
+                  &bull; Futures:{' '}
+                  <code className="font-mono text-foreground">testnet.binancefuture.com</code>{' '}
+                  &bull; HMAC-SHA256 Signed
                 </p>
               </div>
             </div>
@@ -684,26 +745,49 @@ export default function Dashboard() {
                     Spot Demo Wallet
                   </span>
                   <Badge variant="secondary" className="font-mono text-xs">
-                    ${marginData?.spot_usdt || '47.47'} USDT Free
+                    ${marginData?.spot_usdt || '0.00'} USDT Free
                   </Badge>
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <div
+                  className={cn(
+                    'grid gap-2',
+                    marginData?.spot_balances && marginData.spot_balances.length > 0
+                      ? `grid-cols-2 sm:grid-cols-${Math.min(marginData.spot_balances.length + 1, 4)}`
+                      : 'grid-cols-2 sm:grid-cols-3'
+                  )}
+                >
                   <div className="p-2.5 bg-muted/50 rounded-lg border text-center">
                     <p className="text-xs text-muted-foreground">USDT Free</p>
                     <p className="font-mono font-bold text-foreground mt-0.5">
-                      ${marginData?.spot_usdt || '47.47'}
+                      ${marginData?.spot_usdt || '0.00'}
                     </p>
                   </div>
-                  <div className="p-2.5 bg-muted/50 rounded-lg border text-center">
-                    <p className="text-xs text-muted-foreground">SOL</p>
-                    <p className="font-mono font-bold text-foreground mt-0.5">0.0125</p>
-                  </div>
-                  <div className="p-2.5 bg-muted/50 rounded-lg border text-center">
-                    <p className="text-xs text-muted-foreground">BTC</p>
-                    <p className="font-mono font-bold text-foreground mt-0.5">0.00039</p>
-                  </div>
+                  {marginData?.spot_balances && marginData.spot_balances.length > 0 ? (
+                    marginData.spot_balances.slice(0, 5).map((b, i) => (
+                      <div
+                        key={b.asset || i}
+                        className="p-2.5 bg-muted/50 rounded-lg border text-center"
+                      >
+                        <p className="text-xs text-muted-foreground">{b.asset}</p>
+                        <p className="font-mono font-bold text-foreground mt-0.5">
+                          {typeof b.total === 'number' ? b.total.toFixed(6) : b.free || '0'}
+                        </p>
+                      </div>
+                    ))
+                  ) : (
+                    <>
+                      <div className="p-2.5 bg-muted/50 rounded-lg border text-center">
+                        <p className="text-xs text-muted-foreground">SOL</p>
+                        <p className="font-mono font-bold text-foreground mt-0.5">—</p>
+                      </div>
+                      <div className="p-2.5 bg-muted/50 rounded-lg border text-center">
+                        <p className="text-xs text-muted-foreground">BTC</p>
+                        <p className="font-mono font-bold text-foreground mt-0.5">—</p>
+                      </div>
+                    </>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -717,7 +801,7 @@ export default function Dashboard() {
                     Futures Testnet Wallet
                   </span>
                   <Badge variant="secondary" className="font-mono text-xs">
-                    ${marginData?.futures_usdt || '47.47'} USDT Avail
+                    ${marginData?.futures_usdt || '0.00'} USDT Avail
                   </Badge>
                 </CardTitle>
               </CardHeader>
@@ -726,13 +810,27 @@ export default function Dashboard() {
                   <div className="p-2.5 bg-muted/50 rounded-lg border text-center">
                     <p className="text-xs text-muted-foreground">USDT Avail</p>
                     <p className="font-mono font-bold text-foreground mt-0.5">
-                      ${marginData?.futures_usdt || '47.47'}
+                      ${marginData?.futures_usdt || '0.00'}
                     </p>
                   </div>
-                  <div className="p-2.5 bg-muted/50 rounded-lg border text-center">
-                    <p className="text-xs text-muted-foreground">BTC Collateral</p>
-                    <p className="font-mono font-bold text-foreground mt-0.5">0.02</p>
-                  </div>
+                  {marginData?.futures_balances && marginData.futures_balances.length > 0 ? (
+                    marginData.futures_balances.slice(0, 1).map((b, i) => (
+                      <div
+                        key={b.asset || i}
+                        className="p-2.5 bg-muted/50 rounded-lg border text-center"
+                      >
+                        <p className="text-xs text-muted-foreground">{b.asset} Balance</p>
+                        <p className="font-mono font-bold text-foreground mt-0.5">
+                          {typeof b.balance === 'number' ? b.balance.toFixed(6) : '0'}
+                        </p>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="p-2.5 bg-muted/50 rounded-lg border text-center">
+                      <p className="text-xs text-muted-foreground">Collateral</p>
+                      <p className="font-mono font-bold text-foreground mt-0.5">—</p>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -747,7 +845,8 @@ export default function Dashboard() {
                   Live Binance Futures Positions
                 </span>
                 <Badge variant="outline" className="font-mono text-xs">
-                  {marginData?.positions?.length || 1} Open Position
+                  {marginData?.positions?.length ?? 0} Open Position
+                  {(marginData?.positions?.length ?? 0) !== 1 ? 's' : ''}
                 </Badge>
               </CardTitle>
             </CardHeader>
@@ -767,10 +866,16 @@ export default function Dashboard() {
                   <tbody className="divide-y divide-border">
                     {marginData?.positions && marginData.positions.length > 0 ? (
                       marginData.positions.map((p, idx) => (
-                        <tr key={idx} className="hover:bg-muted/30 transition-colors font-mono text-xs">
+                        <tr
+                          key={idx}
+                          className="hover:bg-muted/30 transition-colors font-mono text-xs"
+                        >
                           <td className="py-3 px-3 font-semibold text-foreground">{p.symbol}</td>
                           <td className="py-3 px-3">
-                            <Badge variant={p.side === 'LONG' ? 'default' : 'destructive'} className="text-xs">
+                            <Badge
+                              variant={p.side === 'LONG' ? 'default' : 'destructive'}
+                              className="text-xs"
+                            >
                               {p.side}
                             </Badge>
                           </td>
@@ -778,23 +883,19 @@ export default function Dashboard() {
                           <td className="py-3 px-3">${p.entry_price.toFixed(2)}</td>
                           <td className="py-3 px-3">${p.mark_price.toFixed(2)}</td>
                           <td className={cn('py-3 px-3 font-bold', getPnLColor(p.unrealized_pnl))}>
-                            {p.unrealized_pnl >= 0 ? `+$${p.unrealized_pnl.toFixed(4)}` : `-$${Math.abs(p.unrealized_pnl).toFixed(4)}`}
+                            {p.unrealized_pnl >= 0
+                              ? `+$${p.unrealized_pnl.toFixed(4)}`
+                              : `-$${Math.abs(p.unrealized_pnl).toFixed(4)}`}
                           </td>
                         </tr>
                       ))
                     ) : (
-                      <tr className="hover:bg-muted/30 transition-colors font-mono text-xs">
-                        <td className="py-3 px-3 font-semibold text-foreground">SOLUSDT</td>
-                        <td className="py-3 px-3">
-                          <Badge variant="default" className="text-xs">
-                            LONG
-                          </Badge>
-                        </td>
-                        <td className="py-3 px-3">0.10</td>
-                        <td className="py-3 px-3">$101.26</td>
-                        <td className="py-3 px-3">$101.27</td>
-                        <td className="py-3 px-3 font-bold text-green-600 dark:text-green-400">
-                          +$0.0014
+                      <tr>
+                        <td
+                          colSpan={6}
+                          className="py-6 text-center text-muted-foreground font-mono text-xs"
+                        >
+                          No open futures positions
                         </td>
                       </tr>
                     )}
