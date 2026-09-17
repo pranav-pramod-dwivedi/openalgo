@@ -11,7 +11,16 @@ logger = get_logger(__name__)
 
 
 def is_session_expiry_disabled():
-    """Check if session expiry is disabled (e.g., for crypto brokers or analyze mode)."""
+    """Check if session expiry is disabled (e.g., for crypto brokers, binance demo, or analyze mode)."""
+    try:
+        if (
+            session.get("broker") == "binance_demo"
+            or "binance" in str(session.get("username", "")).lower()
+            or "usd" in str(session.get("username", "")).lower()
+        ):
+            return True
+    except Exception:
+        pass
     try:
         from database.settings_db import get_analyze_mode
         if get_analyze_mode():
@@ -260,6 +269,10 @@ def revoke_user_tokens(revoke_db_tokens=True):
                 logger.exception(f"Error clearing telegram cache: {cache_error}")
 
             if revoke_db_tokens:
+                if username in ["binance_demo", "openalgo_usd"]:
+                    logger.info(f"Auto-expiry: Preserved tokens and sessions for 24/7 account: {username}")
+                    return
+
                 # Revoke the auth token in database
                 inserted_id = upsert_auth(username, "", "", revoke=True)
                 if inserted_id is not None:
