@@ -8,22 +8,19 @@ import { Navbar } from './Navbar'
 export function Layout() {
   const { isAuthenticated, user } = useAuthStore()
 
-  // AuthSync has already synced Flask session with Zustand store
-  // So we just need to check the Zustand store state
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
   }
 
-  // If logged in but no broker selected, redirect to broker selection
   if (!user?.broker) {
     return <Navigate to="/broker" replace />
   }
 
   return (
     <SocketProvider>
-      <div className="min-h-screen bg-background flex flex-col">
+      <div className="min-h-dvh bg-background flex flex-col">
         <Navbar />
-        <main className="container mx-auto px-4 py-6 pb-24 md:pb-6 flex-1">
+        <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-6 pb-24 md:pb-8 flex-1 max-w-7xl">
           <Outlet />
         </main>
         <Footer className="hidden md:block" />
@@ -35,7 +32,7 @@ export function Layout() {
 
 export function PublicLayout() {
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-dvh bg-background">
       <Outlet />
     </div>
   )
