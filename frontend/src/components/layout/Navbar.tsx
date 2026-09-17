@@ -28,16 +28,6 @@ import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
 interface NavbarProps {
-  /**
-   * Span the full viewport instead of the centred, width-capped container.
-   *
-   * Pages rendered inside Layout share its `container mx-auto`, so the nav
-   * lines up with the content below it and this stays false. Full-bleed pages
-   * under FullWidthLayout render this navbar themselves and have no such
-   * container, so a capped nav floats inset above edge-to-edge content -- on a
-   * 1920px screen Tailwind caps `container` at 1536px, leaving ~192px of gutter
-   * each side while the page fills the width.
-   */
   fluid?: boolean
 }
 
@@ -48,8 +38,6 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
-
-  // Profile menu filtered by broker capabilities (shared hook, issue #1480)
   const filteredProfileMenuItems = useProfileMenuItems()
 
   const handleLogout = async () => {
@@ -69,8 +57,6 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
     if (result.success) {
       const newMode = useThemeStore.getState().appMode
       showToast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`)
-
-      // Show warning toast when enabling analyzer mode (like old UI)
       if (newMode === 'analyzer') {
         setTimeout(() => {
           showToast.warning('Analyzer (Sandbox) mode is for testing purposes only', undefined, {
@@ -86,53 +72,55 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
   const isActive = (href: string) => isActiveRoute(location.pathname, href)
 
   return (
-    <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <nav className="sticky top-0 z-50 w-full border-b border-border/50 glass bg-background/80">
       <div
         className={cn(
-          'px-4 flex h-14 items-center',
-          fluid ? 'w-full' : 'container mx-auto'
+          'px-4 sm:px-6 flex h-12 items-center gap-1',
+          fluid ? 'w-full' : 'container mx-auto max-w-7xl'
         )}
       >
         {/* Mobile Menu */}
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetTrigger asChild className="md:hidden">
-            <Button variant="ghost" size="icon" className="mr-2 min-h-[44px] min-w-[44px]">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="mr-1 min-h-[44px] min-w-[44px] rounded-xl"
+            >
               <Menu className="h-5 w-5" />
               <span className="sr-only">Toggle menu</span>
             </Button>
           </SheetTrigger>
           <SheetContent side="left" className="w-72 overflow-y-auto">
-            {/* Visually hidden but accessible for screen readers */}
             <SheetHeader className="sr-only">
               <SheetTitle>Navigation Menu</SheetTitle>
               <SheetDescription>Main navigation and quick access links</SheetDescription>
             </SheetHeader>
-            <div className="flex flex-col gap-4 py-4">
+            <div className="flex flex-col gap-5 py-4">
               <Link
                 to="/dashboard"
-                className="flex items-center gap-2 px-2"
+                className="flex items-center gap-2.5 px-2"
                 onClick={() => setMobileOpen(false)}
               >
-                <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8" />
-                <span className="font-semibold">OpenAlgo</span>
+                <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8 rounded-lg" />
+                <span className="font-semibold tracking-tight">OpenAlgo</span>
               </Link>
 
-              {/* Secondary nav items (not in bottom nav) */}
-              <nav className="flex flex-col gap-1">
-                <div className="px-3 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              <nav className="flex flex-col gap-0.5">
+                <div className="px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">
                   Navigation
                 </div>
                 {mobileSheetItems.map((item) => {
                   const active = isActive(item.href)
                   const cls = cn(
-                    'flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors min-h-[44px] touch-manipulation',
+                    'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 min-h-[44px] touch-manipulation',
                     active
-                      ? 'bg-primary text-primary-foreground'
-                      : 'hover:bg-muted active:bg-muted'
+                      ? 'bg-primary text-primary-foreground font-medium'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                   )
                   const inner = (
                     <>
-                      <item.icon className="h-4 w-4" />
+                      <item.icon className="h-[18px] w-[18px]" />
                       {item.label}
                     </>
                   )
@@ -160,9 +148,8 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
                 })}
               </nav>
 
-              {/* Profile menu items for mobile access */}
-              <nav className="flex flex-col gap-1 border-t pt-4">
-                <div className="px-3 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              <nav className="flex flex-col gap-0.5 border-t border-border/50 pt-4">
+                <div className="px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">
                   Quick Access
                 </div>
                 {filteredProfileMenuItems.map((item) => {
@@ -173,14 +160,14 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
                       to={item.href}
                       onClick={() => setMobileOpen(false)}
                       className={cn(
-                        'flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors min-h-[44px] touch-manipulation',
+                        'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 min-h-[44px] touch-manipulation',
                         active
-                          ? 'bg-primary text-primary-foreground'
-                          : 'hover:bg-muted active:bg-muted'
+                          ? 'bg-primary text-primary-foreground font-medium'
+                          : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                       )}
                       aria-current={active ? 'page' : undefined}
                     >
-                      <item.icon className="h-4 w-4" />
+                      <item.icon className="h-[18px] w-[18px]" />
                       {item.label}
                     </Link>
                   )
@@ -189,10 +176,10 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
                   href="https://docs.openalgo.in"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors min-h-[44px] touch-manipulation hover:bg-muted active:bg-muted"
+                  className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 min-h-[44px] touch-manipulation text-muted-foreground hover:bg-muted hover:text-foreground"
                   onClick={() => setMobileOpen(false)}
                 >
-                  <BookOpen className="h-4 w-4" />
+                  <BookOpen className="h-[18px] w-[18px]" />
                   Docs
                 </a>
               </nav>
@@ -201,32 +188,29 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
         </Sheet>
 
         {/* Logo */}
-        <Link to="/dashboard" className="flex items-center gap-2 mr-6">
-          <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8" />
-          <span className="hidden font-semibold sm:inline-block">OpenAlgo</span>
+        <Link to="/dashboard" className="flex items-center gap-2 mr-4">
+          <img src="/logo.png" alt="OpenAlgo" className="h-7 w-7 rounded-lg" />
+          <span className="hidden font-semibold tracking-tight text-sm sm:inline-block">
+            OpenAlgo
+          </span>
         </Link>
 
-        {/* Desktop Navigation.
-            Icon-only between md and xl so all 9 items fit portrait monitors
-            and small laptops (768-1280px wide) without squashing or pushing
-            the profile menu off-screen; full labels from xl up (issue #1384). */}
-        <nav className="hidden md:flex items-center gap-1">
+        {/* Desktop Navigation — icon-only between md and xl, full labels from xl */}
+        <nav className="hidden md:flex items-center gap-0.5">
           {navItems.map((item) => {
             const active = isActive(item.href)
             const className = cn(
-              'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+              'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium transition-all duration-200',
               active
-                ? 'bg-primary text-primary-foreground'
+                ? 'bg-foreground text-background'
                 : 'text-muted-foreground hover:bg-muted hover:text-foreground'
             )
             const content = (
               <>
-                <item.icon className="h-4 w-4 shrink-0" />
+                <item.icon className="h-3.5 w-3.5 shrink-0" />
                 <span className="hidden xl:inline">{item.label}</span>
               </>
             )
-            // Flask-served pages (e.g. /trading) need a full page load,
-            // not client-side routing.
             return item.external ? (
               <a
                 key={item.href}
@@ -252,21 +236,21 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
         </nav>
 
         {/* Right Side */}
-        <div className="ml-auto flex items-center gap-1 sm:gap-2">
-          {/* Global Account Switcher Tabs: INR vs USD */}
-          <div className="flex items-center p-0.5 bg-muted/60 rounded-lg border text-xs shadow-xs">
+        <div className="ml-auto flex items-center gap-1.5">
+          {/* Account Switcher */}
+          <div className="flex items-center p-0.5 bg-muted/60 rounded-lg border border-border/50 text-xs">
             <button
               type="button"
               onClick={() => {
                 window.location.href = '/auth/switch-account?account=inr'
               }}
               className={cn(
-                'flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all cursor-pointer font-medium text-xs',
-                !(user?.username && user.username.toLowerCase().includes('usd'))
-                  ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                'flex items-center gap-1 px-2 py-1 rounded-md transition-all duration-200 cursor-pointer font-medium text-xs',
+                !user?.username?.toLowerCase().includes('usd')
+                  ? 'bg-foreground text-background font-semibold shadow-xs'
                   : 'text-muted-foreground hover:text-foreground'
               )}
-              title="Switch to Indian Markets (INR ₹10,000)"
+              title="Indian Markets (INR)"
             >
               <span>🇮🇳</span>
               <span className="hidden sm:inline">INR</span>
@@ -277,22 +261,24 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
                 window.location.href = '/auth/switch-account?account=usd'
               }}
               className={cn(
-                'flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all cursor-pointer font-medium text-xs',
-                user?.username && user.username.toLowerCase().includes('usd')
+                'flex items-center gap-1 px-2 py-1 rounded-md transition-all duration-200 cursor-pointer font-medium text-xs',
+                user?.username?.toLowerCase().includes('usd')
                   ? 'bg-emerald-600 text-white font-semibold shadow-xs'
                   : 'text-muted-foreground hover:text-foreground'
               )}
-              title="Switch to Forex & Crypto (USD $99.91)"
+              title="Forex & Crypto (USD)"
             >
               <span>🌐</span>
               <span className="hidden sm:inline">USD</span>
             </button>
           </div>
 
-          {/* Broker Badge — hidden below lg to keep the bar within narrow
-              (portrait/small-laptop) widths */}
+          {/* Broker Badge */}
           {user?.broker && (
-            <Badge variant="outline" className="hidden lg:flex text-xs">
+            <Badge
+              variant="outline"
+              className="hidden lg:flex text-[10px] font-medium border-border/50 rounded-md px-1.5 py-0"
+            >
               {user.broker}
             </Badge>
           )}
@@ -301,13 +287,11 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
           <Badge
             variant={appMode === 'live' ? 'default' : 'secondary'}
             className={cn(
-              'text-xs',
+              'text-[10px] font-medium rounded-md px-1.5 py-0',
               appMode === 'analyzer' && 'bg-purple-500 hover:bg-purple-600 text-white'
             )}
           >
-            <span className="hidden lg:inline">
-              {appMode === 'live' ? 'Live Mode' : 'Analyze Mode'}
-            </span>
+            <span className="hidden lg:inline">{appMode === 'live' ? 'Live Mode' : 'Analyze'}</span>
             <span className="lg:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
           </Badge>
 
@@ -315,18 +299,17 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8"
+            className="h-7 w-7 rounded-lg"
             onClick={handleModeToggle}
             disabled={isTogglingMode}
             title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
-            aria-label={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
           >
             {isTogglingMode ? (
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
             ) : appMode === 'live' ? (
-              <Zap className="h-4 w-4" />
+              <Zap className="h-3.5 w-3.5" />
             ) : (
-              <BarChart3 className="h-4 w-4" />
+              <BarChart3 className="h-3.5 w-3.5" />
             )}
           </Button>
 
@@ -334,13 +317,12 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8"
+            className="h-7 w-7 rounded-lg"
             onClick={toggleMode}
             disabled={appMode !== 'live'}
             title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-            aria-label={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
           >
-            {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            {mode === 'light' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
           </Button>
 
           {/* Profile Dropdown */}
@@ -349,18 +331,16 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+                className="h-7 w-7 rounded-full bg-foreground text-background text-xs font-semibold"
                 aria-label="Open user menu"
               >
-                <span className="text-sm font-medium">
-                  {user?.username?.[0]?.toUpperCase() || 'O'}
-                </span>
+                {user?.username?.[0]?.toUpperCase() || 'O'}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuContent align="end" className="w-56 rounded-xl">
               {filteredProfileMenuItems.map((item) =>
                 item.external ? (
-                  <DropdownMenuItem key={item.href} asChild className="cursor-pointer">
+                  <DropdownMenuItem key={item.href} asChild className="cursor-pointer rounded-lg">
                     <a href={item.href} className="flex items-center">
                       <item.icon className="h-4 w-4 mr-2" />
                       {item.label}
@@ -370,14 +350,14 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
                   <DropdownMenuItem
                     key={item.href}
                     onSelect={() => navigate(item.href)}
-                    className="cursor-pointer"
+                    className="cursor-pointer rounded-lg"
                   >
                     <item.icon className="h-4 w-4 mr-2" />
                     {item.label}
                   </DropdownMenuItem>
                 )
               )}
-              <DropdownMenuItem asChild>
+              <DropdownMenuItem asChild className="rounded-lg">
                 <a
                   href="https://docs.openalgo.in"
                   target="_blank"
@@ -391,7 +371,7 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() => setShowLogoutDialog(true)}
-                className="text-destructive focus:text-destructive"
+                className="text-destructive focus:text-destructive rounded-lg"
               >
                 <LogOut className="h-4 w-4 mr-2" />
                 Logout
