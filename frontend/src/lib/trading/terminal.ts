@@ -109,6 +109,7 @@ export interface DrawStats {
 }
 
 import type { AgentChartCommand } from '@/lib/agent/stream'
+import { useAuthStore } from '@/stores/authStore'
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
 import {
   applyChartCommands,
@@ -957,6 +958,28 @@ export class TradingTerminal {
     // but leave both displayed series and their timeline to the playhead.
     if (this.replay) return
     if (!this.price || !this.volume || !this.rawBars.length) return
+
+    // Ensure strict deduplication and chronological order by timeframe bucket
+    const sec = intervalSeconds(this.interval) || 60
+    const map = new Map<number, Bar>()
+    for (const b of this.rawBars) {
+      const bucketTime = Math.floor(b.time / sec) * sec
+      const existing = map.get(bucketTime)
+      if (!existing) {
+        map.set(bucketTime, { ...b, time: bucketTime })
+      } else {
+        map.set(bucketTime, {
+          time: bucketTime,
+          open: existing.open,
+          high: Math.max(existing.high, b.high),
+          low: Math.min(existing.low, b.low),
+          close: b.close,
+          volume: (existing.volume || 0) + (b.volume || 0),
+        })
+      }
+    }
+    this.rawBars = Array.from(map.values()).sort((a, b) => a.time - b.time)
+
     const cfg = CHART_TYPES[this.ctype] || CHART_TYPES.candlestick
     if (cfg.transform) {
       const t = runTransform(cfg.transform(this.boxOf()), this.rawBars)
@@ -4368,14 +4391,22 @@ export class TradingTerminal {
     if (this.bookTimer) clearInterval(this.bookTimer)
     this.bookTimer = setInterval(() => this.pollBook(), 8000)
 
-    // restore the last symbol; fall back to BHEL/NSE if it's gone or has no data.
+    // restore the last symbol; fall back to BTCUSDT for crypto brokers or BHEL/NSE for Indian equities
     let loaded = false
+    const currentBroker = (useAuthStore.getState().user?.broker || '').toLowerCase()
+    const isCryptoBroker =
+      currentBroker.includes('binance') ||
+      currentBroker.includes('crypto') ||
+      window.location.search.includes('binance') ||
+      document.cookie.includes('binance')
+
     try {
       const saved = JSON.parse(this.lsGet('symbol') || 'null') as {
         symbol?: string
         exchange?: string
       } | null
-      if (saved?.symbol) {
+      // For crypto brokers, do not restore non-crypto symbols (like EURUSD forex or Indian equities)
+      if (saved?.symbol && (!isCryptoBroker || saved.exchange === 'CRYPTO')) {
         const rows = await this.search(saved.symbol, saved.exchange)
         const row = rows.find((r) => r.symbol === saved.symbol && r.exchange === saved.exchange)
         if (row) loaded = await this.loadSymbol(row, { silent: true })
@@ -4385,14 +4416,13 @@ export class TradingTerminal {
     }
     if (!loaded && !this.destroyed) {
       try {
-        const isCryptoBroker = window.location.search.includes("binance") || document.cookie.includes("binance")
-        const defaultSym = isCryptoBroker ? "BTCUSDT" : "BHEL"
-        const defaultEx = isCryptoBroker ? "CRYPTO" : "NSE"
+        const defaultSym = isCryptoBroker ? 'BTCUSDT' : 'BHEL'
+        const defaultEx = isCryptoBroker ? 'CRYPTO' : 'NSE'
         const rows = await this.search(defaultSym, defaultEx)
         const matched = rows.find((r) => r.symbol === defaultSym)
         if (matched) await this.loadSymbol(matched)
         else {
-          const bhel = (await this.search("BHEL", "NSE")).find((r) => r.symbol === "BHEL")
+          const bhel = (await this.search('BHEL', 'NSE')).find((r) => r.symbol === 'BHEL')
           if (bhel) await this.loadSymbol(bhel)
         }
       } catch {
@@ -4450,5 +4480,8 @@ export class TradingTerminal {
     this.chart = null
     this.ws = null
     this.screenshotExcluded.length = 0
+    if (this.container) {
+      this.container.innerHTML = ''
+    }
   }
 }
