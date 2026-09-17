@@ -11,10 +11,14 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi } from '@/api/trading'
+import { useSocketContext } from '@/components/socket/SocketProvider'
+import { PlaceOrderDialog } from '@/components/trading'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { DataFreshness } from '@/components/ui/data-freshness'
+import { EmptyState } from '@/components/ui/empty-state'
 import {
   Table,
   TableBody,
@@ -24,7 +28,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { PlaceOrderDialog } from '@/components/trading'
 import { calculateLiveStats, useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
@@ -33,7 +36,6 @@ import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Holding, HoldingsStats } from '@/types/trading'
 import { showToast } from '@/utils/toast'
-import { EmptyState } from '@/components/ui/empty-state'
 
 function formatPercent(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
@@ -50,6 +52,7 @@ interface HoldingOrderIntent {
 
 export default function Holdings() {
   const { apiKey, user } = useAuthStore()
+  const { socket } = useSocketContext()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [holdings, setHoldings] = useState<Holding[]>([])
   const [stats, setStats] = useState<HoldingsStats | null>(null)
@@ -58,6 +61,7 @@ export default function Holdings() {
   const [error, setError] = useState<string | null>(null)
   const [showStaleWarning, setShowStaleWarning] = useState(false)
   const [orderIntent, setOrderIntent] = useState<HoldingOrderIntent | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null)
 
   // Page visibility tracking for resource optimization
   const { isVisible, wasHidden, timeSinceHidden } = usePageVisibility()
@@ -108,6 +112,7 @@ export default function Holdings() {
           setHoldings(response.data.holdings || [])
           setStats(response.data.statistics)
           setError(null)
+          setLastUpdated(new Date().toISOString())
         } else {
           setError(response.message || 'Failed to fetch holdings')
         }
@@ -248,7 +253,12 @@ export default function Holdings() {
           </div>
           <p className="text-muted-foreground">View your holdings portfolio</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3 flex-wrap">
+          <DataFreshness
+            lastUpdated={lastUpdated}
+            isRefreshing={isRefreshing}
+            isConnected={socket?.connected}
+          />
           <Button
             variant="outline"
             size="sm"
@@ -334,7 +344,13 @@ export default function Holdings() {
               <Loader2 className="h-8 w-8 animate-spin" />
             </div>
           ) : error ? (
-            <div className="text-center py-12 text-muted-foreground">{error}</div>
+            <div className="text-center py-12 space-y-3">
+              <p className="text-muted-foreground">{error}</p>
+              <Button variant="outline" size="sm" onClick={() => fetchHoldings(true)}>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Retry
+              </Button>
+            </div>
           ) : holdings.length === 0 ? (
             <EmptyState
               icon={Wallet}

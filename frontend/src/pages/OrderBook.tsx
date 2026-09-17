@@ -13,8 +13,9 @@ import {
   X,
   XCircle,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type QuotesData, tradingApi } from '@/api/trading'
+import { useSocketContext } from '@/components/socket/SocketProvider'
 import GttTab from '@/components/trading/GttTab'
 import {
   AlertDialog,
@@ -30,6 +31,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { DataFreshness } from '@/components/ui/data-freshness'
 import {
   Dialog,
   DialogContent,
@@ -131,12 +133,18 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; l
 export default function OrderBook() {
   const { apiKey, user } = useAuthStore()
   const { isCrypto } = useSupportedExchanges()
+  const { socket } = useSocketContext()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [orders, setOrders] = useState<Order[]>([])
   const [stats, setStats] = useState<OrderStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null)
+
+  // Auto-refresh: poll every 30s even when no socket events arrive
+  // (ensures data stays fresh even when no trades are happening)
+  const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Filter state
   const [statusFilter, setStatusFilter] = useState<string[]>([])
@@ -237,6 +245,7 @@ export default function OrderBook() {
           setOrders(response.data.orders || [])
           setStats(response.data.statistics)
           setError(null)
+          setLastUpdated(new Date().toISOString())
         } else {
           setError(response.message || 'Failed to fetch orders')
         }
@@ -252,6 +261,16 @@ export default function OrderBook() {
 
   useEffect(() => {
     fetchOrders()
+  }, [fetchOrders])
+
+  // Auto-refresh every 30s to keep data fresh when no events fire
+  useEffect(() => {
+    autoRefreshRef.current = setInterval(() => {
+      fetchOrders()
+    }, 30_000)
+    return () => {
+      if (autoRefreshRef.current) clearInterval(autoRefreshRef.current)
+    }
   }, [fetchOrders])
 
   // Refresh on order events instead of polling
@@ -430,9 +449,16 @@ export default function OrderBook() {
   return (
     <div className="space-y-6">
       {/* Page Header */}
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Order Book</h1>
-        <p className="text-muted-foreground">View and manage your orders</p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Order Book</h1>
+          <p className="text-muted-foreground">View and manage your orders</p>
+        </div>
+        <DataFreshness
+          lastUpdated={lastUpdated}
+          isRefreshing={isRefreshing}
+          isConnected={socket?.connected}
+        />
       </div>
 
       <Tabs defaultValue="orders" className="space-y-6">
@@ -603,7 +629,13 @@ export default function OrderBook() {
                   <Loader2 className="h-8 w-8 animate-spin" />
                 </div>
               ) : error ? (
-                <div className="text-center py-12 text-muted-foreground">{error}</div>
+                <div className="text-center py-12 space-y-3">
+                  <p className="text-muted-foreground">{error}</p>
+                  <Button variant="outline" size="sm" onClick={() => fetchOrders(true)}>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Retry
+                  </Button>
+                </div>
               ) : sortedAndFilteredOrders.length === 0 ? (
                 hasActiveFilters ? (
                   <EmptyState

@@ -875,3 +875,81 @@
 .scrollbar-thin::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* =============================================================================
+   TRADING TABLE UX IMPROVEMENTS
+   ============================================================================= */
+
+/* Subtle row hover with left-edge highlight for active rows */
+.table-row-active {
+  position: relative;
+}
+
+.table-row-active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: hsl(var(--primary));
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.table-row-active:hover::before {
+  opacity: 1;
+}
+
+/* Monospace number alignment for trading tables */
+.td-mono {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Pulse animation for new data indicators */
+@keyframes data-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.data-stale {
+  animation: data-pulse 2s ease-in-out infinite;
+}
+
+/* Smooth card transitions */
+.card-trading {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.card-trading:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.dark .card-trading:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Better table header readability */
+table th {
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-transform: none;
+}
+
+/* Quick stat card number styling */
+.stat-number {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* Status badge pulse for open/pending states */
+@keyframes status-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; }
+  50% { box-shadow: 0 0 0 3px transparent; }
+}
+
+.status-pulse {
+  animation: status-pulse 2s ease-in-out infinite;
+}
