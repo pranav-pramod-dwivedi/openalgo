@@ -122,6 +122,36 @@ def close_position_with_auth(
 
         return success, response, status_code
 
+    # Route Binance Demo directly
+    if broker == "binance_demo":
+        from services.binance_demo_service import binance_demo_service
+
+        sym = position_data.get("symbol")
+        exchange = position_data.get("exchange", "CRYPTO")
+        product = position_data.get("product_type") or position_data.get("product", "FUTURES")
+        if sym:
+            success, response_data, status_code = binance_demo_service.close_position(
+                symbol=sym, exchange=exchange, product=product
+            )
+        else:
+            success, response_data, status_code = binance_demo_service.close_all_positions()
+
+        bus.publish(
+            PositionClosedEvent(
+                mode="live",
+                api_type=API_TYPE,
+                symbol=sym or "",
+                exchange=exchange or "",
+                product=product or "",
+                orderid=response_data.get("orderid", ""),
+                message=response_data.get("message", ""),
+                request_data=position_request_data,
+                response_data=response_data,
+                api_key=original_data.get("apikey", ""),
+            )
+        )
+        return success, response_data, status_code
+
     broker_module = import_broker_module(broker)
     if broker_module is None:
         error_response = {"status": "error", "message": "Broker-specific module not found"}

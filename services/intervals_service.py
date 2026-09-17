@@ -42,26 +42,33 @@ def get_intervals_with_auth(auth_token: str, broker: str) -> tuple[bool, dict[st
         - Response data (dict)
         - HTTP status code (int)
     """
-    broker_module = import_broker_module(broker)
-    if broker_module is None:
-        return False, {"status": "error", "message": "Broker-specific module not found"}, 404
+    def sort_intervals(interval_list):
+        """Sort intervals numerically instead of alphabetically"""
+        import re
+
+        def extract_number(interval):
+            match = re.match(r"(\d+)", interval)
+            return int(match.group(1)) if match else 0
+
+        return sorted(interval_list, key=extract_number)
+
+    broker_module = import_broker_module(broker) if broker != "binance_demo" else None
+
+    # If broker is binance_demo or has no broker-specific data module, fall back to SUPPORTED_INTERVALS
+    if broker == "binance_demo" or broker_module is None:
+        intervals = {
+            "seconds": sort_intervals([k for k in SUPPORTED_INTERVALS if k.endswith("s")]),
+            "minutes": sort_intervals([k for k in SUPPORTED_INTERVALS if k.endswith("m")]),
+            "hours": sort_intervals([k for k in SUPPORTED_INTERVALS if k.endswith("h")]),
+            "days": sorted([k for k in SUPPORTED_INTERVALS if k == "D"]),
+            "weeks": sorted([k for k in SUPPORTED_INTERVALS if k == "W"]),
+            "months": sorted([k for k in SUPPORTED_INTERVALS if k == "M"]),
+        }
+        return True, {"status": "success", "data": intervals}, 200
 
     try:
         # Initialize broker's data handler
         data_handler = broker_module.BrokerData(auth_token)
-
-        # Get supported intervals from the timeframe map with proper numerical sorting
-        def sort_intervals(interval_list):
-            """Sort intervals numerically instead of alphabetically"""
-
-            def extract_number(interval):
-                """Extract numeric value from interval string for proper sorting"""
-                import re
-
-                match = re.match(r"(\d+)", interval)
-                return int(match.group(1)) if match else 0
-
-            return sorted(interval_list, key=extract_number)
 
         # Only what the history API will actually accept. A broker map often
         # carries an alias for a resolution it already has (Zerodha maps both

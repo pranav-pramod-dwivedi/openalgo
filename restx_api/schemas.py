@@ -124,6 +124,9 @@ class CancelOrderSchema(Schema):
 class ClosePositionSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
+    symbol = fields.Str(required=False, allow_none=True)
+    exchange = fields.Str(required=False, allow_none=True)
+    product = fields.Str(required=False, allow_none=True)
 
 
 class CancelAllOrderSchema(Schema):

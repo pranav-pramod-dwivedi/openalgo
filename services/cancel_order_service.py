@@ -119,6 +119,36 @@ def cancel_order_with_auth(
 
         return success, response, status_code
 
+    if broker == "binance_demo":
+        from services.binance_demo_service import binance_demo_service
+
+        success, response_data, status_code = binance_demo_service.cancel_order(orderid)
+        if success:
+            bus.publish(
+                OrderCancelledEvent(
+                    mode="live",
+                    api_type=API_TYPE,
+                    orderid=orderid,
+                    status=response_data.get("status", "success"),
+                    request_data=order_request_data,
+                    response_data=response_data,
+                    api_key=original_data.get("apikey", ""),
+                )
+            )
+        else:
+            bus.publish(
+                OrderCancelFailedEvent(
+                    mode="live",
+                    api_type=API_TYPE,
+                    orderid=orderid,
+                    error_message=response_data.get("message", ""),
+                    request_data=order_request_data,
+                    response_data=response_data,
+                    api_key=original_data.get("apikey", ""),
+                )
+            )
+        return success, response_data, status_code
+
     broker_module = import_broker_module(broker)
     if broker_module is None:
         error_response = {"status": "error", "message": "Broker-specific module not found"}

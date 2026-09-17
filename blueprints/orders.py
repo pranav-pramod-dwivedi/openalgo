@@ -564,6 +564,15 @@ def close_position():
         if not auth_token or not broker_name:
             return jsonify({"status": "error", "message": "Authentication error"}), 401
 
+        # Direct support for Binance Demo / Crypto
+        if broker_name == "binance_demo" or exchange in ["CRYPTO", "BINANCE", "BINANCE_FUTURES"]:
+            from services.binance_demo_service import binance_demo_service
+
+            success, response_data, status_code = binance_demo_service.close_position(
+                symbol=symbol, exchange=exchange, product=product
+            )
+            return jsonify(response_data), status_code
+
         # Dynamically import broker-specific modules for API
         api_funcs = dynamic_import(
             broker_name, "api.order_api", ["place_smartorder_api", "get_open_position"]
@@ -661,6 +670,13 @@ def close_all_positions():
         if not auth_token or not broker_name:
             return jsonify({"status": "error", "message": "Authentication error"}), 401
 
+        # Direct support for Binance Demo
+        if broker_name == "binance_demo":
+            from services.binance_demo_service import binance_demo_service
+
+            success, response_data, status_code = binance_demo_service.close_all_positions()
+            return jsonify(response_data), status_code
+
         # Import necessary functions
         from database.auth_db import get_api_key_for_tradingview
         from database.settings_db import get_analyze_mode
@@ -705,6 +721,13 @@ def cancel_all_orders_ui():
 
         if not auth_token or not broker_name:
             return jsonify({"status": "error", "message": "Authentication error"}), 401
+
+        # Direct support for Binance Demo
+        if broker_name == "binance_demo":
+            from services.binance_demo_service import binance_demo_service
+
+            success, response_data, status_code = binance_demo_service.cancel_all_orders()
+            return jsonify(response_data), status_code
 
         # Import necessary functions
         from database.auth_db import get_api_key_for_tradingview
@@ -768,6 +791,13 @@ def cancel_order_ui():
 
         if not orderid:
             return jsonify({"status": "error", "message": "Order ID is required"}), 400
+
+        # Direct support for Binance Demo
+        if broker_name == "binance_demo":
+            from services.binance_demo_service import binance_demo_service
+
+            success, response_data, status_code = binance_demo_service.cancel_order(orderid)
+            return jsonify(response_data), status_code
 
         # Import necessary functions
         from database.auth_db import get_api_key_for_tradingview
