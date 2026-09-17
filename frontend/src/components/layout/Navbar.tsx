@@ -1,9 +1,8 @@
-import { BarChart3, BookOpen, LogOut, Menu, Moon, Sun, Zap } from 'lucide-react'
+import { LogOut, Menu, Moon, Sun, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { authApi } from '@/api/auth'
 import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -21,7 +20,6 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet'
 import { isActiveRoute, mobileSheetItems, navItems } from '@/config/navigation'
-import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -36,9 +34,8 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
-  const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
+  const { mode, toggleMode } = useThemeStore()
   const { user, logout } = useAuthStore()
-  const filteredProfileMenuItems = useProfileMenuItems()
 
   const handleLogout = async () => {
     try {
@@ -52,354 +49,207 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
     }
   }
 
-  const handleModeToggle = async () => {
-    const result = await toggleAppMode()
-    if (result.success) {
-      const newMode = useThemeStore.getState().appMode
-      showToast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`)
-      if (newMode === 'analyzer') {
-        setTimeout(() => {
-          showToast.warning('Analyzer (Sandbox) mode is for testing purposes only', undefined, {
-            duration: 10000,
-          })
-        }, 2000)
-      }
-    } else {
-      showToast.error(result.message || 'Failed to toggle mode')
-    }
-  }
-
   const isActive = (href: string) => isActiveRoute(location.pathname, href)
 
   return (
-    <nav className="sticky top-0 z-50 w-full border-b border-border/50 glass bg-background/80">
+    <nav className="sticky top-0 z-50 w-full bg-background/80 backdrop-blur-md border-b border-border/60 transition-all">
       <div
         className={cn(
-          'px-4 sm:px-6 flex h-12 items-center gap-1',
+          'px-4 sm:px-6 flex h-14 items-center justify-between gap-2',
           fluid ? 'w-full' : 'container mx-auto max-w-7xl'
         )}
       >
-        {/* Mobile Menu */}
-        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-          <SheetTrigger asChild className="md:hidden">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="mr-1 min-h-[44px] min-w-[44px] rounded-xl"
-            >
-              <Menu className="h-5 w-5" />
-              <span className="sr-only">Toggle menu</span>
-            </Button>
-          </SheetTrigger>
-          <SheetContent side="left" className="w-72 overflow-y-auto">
-            <SheetHeader className="sr-only">
-              <SheetTitle>Navigation Menu</SheetTitle>
-              <SheetDescription>Main navigation and quick access links</SheetDescription>
-            </SheetHeader>
-            <div className="flex flex-col gap-5 py-4">
-              <Link
-                to="/dashboard"
-                className="flex items-center gap-2.5 px-2"
-                onClick={() => setMobileOpen(false)}
+        {/* Left Side: Monetra Brand Logo & Nav */}
+        <div className="flex items-center gap-6">
+          {/* Mobile Menu Trigger */}
+          <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+            <SheetTrigger asChild className="md:hidden">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="min-h-[40px] min-w-[40px] rounded-full hover:bg-muted"
               >
-                <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8 rounded-lg" />
-                <span className="font-semibold tracking-tight">OpenAlgo</span>
-              </Link>
-
-              <nav className="flex flex-col gap-0.5">
-                <div className="px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">
-                  Navigation
-                </div>
-                {mobileSheetItems.map((item) => {
-                  const active = isActive(item.href)
-                  const cls = cn(
-                    'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 min-h-[44px] touch-manipulation',
-                    active
-                      ? 'bg-primary text-primary-foreground font-medium'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                  )
-                  const inner = (
-                    <>
-                      <item.icon className="h-[18px] w-[18px]" />
-                      {item.label}
-                    </>
-                  )
-                  return item.external ? (
-                    <a
-                      key={item.href}
-                      href={item.href}
-                      onClick={() => setMobileOpen(false)}
-                      className={cls}
-                      aria-current={active ? 'page' : undefined}
-                    >
-                      {inner}
-                    </a>
-                  ) : (
-                    <Link
-                      key={item.href}
-                      to={item.href}
-                      onClick={() => setMobileOpen(false)}
-                      className={cls}
-                      aria-current={active ? 'page' : undefined}
-                    >
-                      {inner}
-                    </Link>
-                  )
-                })}
-              </nav>
-
-              <nav className="flex flex-col gap-0.5 border-t border-border/50 pt-4">
-                <div className="px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">
-                  Quick Access
-                </div>
-                {filteredProfileMenuItems.map((item) => {
-                  const active = isActive(item.href)
-                  return (
-                    <Link
-                      key={item.href}
-                      to={item.href}
-                      onClick={() => setMobileOpen(false)}
-                      className={cn(
-                        'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 min-h-[44px] touch-manipulation',
-                        active
-                          ? 'bg-primary text-primary-foreground font-medium'
-                          : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                      )}
-                      aria-current={active ? 'page' : undefined}
-                    >
-                      <item.icon className="h-[18px] w-[18px]" />
-                      {item.label}
-                    </Link>
-                  )
-                })}
-                <a
-                  href="https://docs.openalgo.in"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 min-h-[44px] touch-manipulation text-muted-foreground hover:bg-muted hover:text-foreground"
+                <Menu className="h-5 w-5" />
+                <span className="sr-only">Toggle menu</span>
+              </Button>
+            </SheetTrigger>
+            <SheetContent side="left" className="w-72 overflow-y-auto rounded-r-3xl">
+              <SheetHeader className="sr-only">
+                <SheetTitle>Navigation Menu</SheetTitle>
+                <SheetDescription>Main navigation and quick access links</SheetDescription>
+              </SheetHeader>
+              <div className="flex flex-col gap-5 py-4">
+                <Link
+                  to="/dashboard"
+                  className="flex items-center gap-3 px-2"
                   onClick={() => setMobileOpen(false)}
                 >
-                  <BookOpen className="h-[18px] w-[18px]" />
-                  Docs
-                </a>
-              </nav>
-            </div>
-          </SheetContent>
-        </Sheet>
+                  <div className="w-8 h-8 rounded-xl bg-blue-500 flex items-center justify-center text-white shadow-sm shadow-blue-500/30">
+                    <Zap className="h-5 w-5 fill-current" />
+                  </div>
+                  <span className="font-bold text-lg tracking-tight">OpenAlgo</span>
+                </Link>
 
-        {/* Logo & Terminal Status */}
-        <Link to="/dashboard" className="flex items-center gap-2.5 mr-5 group">
-          <div className="relative flex items-center justify-center">
-            <img src="/logo.png" alt="OpenAlgo" className="h-7 w-7 rounded-sm ring-1 ring-border group-hover:ring-foreground transition-all" />
-          </div>
-          <div className="hidden sm:flex items-center gap-2">
-            <span className="font-extrabold tracking-tight text-sm text-foreground">
+                <nav className="flex flex-col gap-1">
+                  <div className="px-3 py-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                    Menu
+                  </div>
+                  {mobileSheetItems.map((item) => {
+                    const active = isActive(item.href)
+                    const cls = cn(
+                      'flex items-center gap-3 rounded-full px-4 py-2.5 text-sm font-medium transition-all duration-150 min-h-[44px]',
+                      active
+                        ? 'bg-[#18191D] text-white dark:bg-white dark:text-[#18191D] shadow-sm'
+                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                    )
+                    return item.external ? (
+                      <a
+                        key={item.href}
+                        href={item.href}
+                        onClick={() => setMobileOpen(false)}
+                        className={cls}
+                        aria-current={active ? 'page' : undefined}
+                      >
+                        <item.icon className="h-[18px] w-[18px]" />
+                        {item.label}
+                      </a>
+                    ) : (
+                      <Link
+                        key={item.href}
+                        to={item.href}
+                        onClick={() => setMobileOpen(false)}
+                        className={cls}
+                        aria-current={active ? 'page' : undefined}
+                      >
+                        <item.icon className="h-[18px] w-[18px]" />
+                        {item.label}
+                      </Link>
+                    )
+                  })}
+                </nav>
+              </div>
+            </SheetContent>
+          </Sheet>
+
+          {/* Monetra Brand Spark Icon + Name */}
+          <Link to="/dashboard" className="flex items-center gap-2.5 group">
+            <div className="w-8 h-8 rounded-xl bg-blue-500 flex items-center justify-center text-white shadow-sm shadow-blue-500/20 group-hover:scale-105 transition-transform">
+              <Zap className="h-4 w-4 fill-current text-white" />
+            </div>
+            <span className="font-bold text-base tracking-tight text-foreground">
               OpenAlgo
             </span>
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-[10px] font-mono font-semibold uppercase tracking-wider bg-transparent text-foreground border border-border">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              TERMINAL
-            </span>
-          </div>
-        </Link>
+          </Link>
 
-        {/* Desktop Navigation — Swiss precision tabs */}
-        <nav className="hidden md:flex items-center gap-0.5">
-          {navItems.map((item) => {
-            const active = isActive(item.href)
-            const className = cn(
-              'flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs font-medium transition-all duration-100',
-              active
-                ? 'bg-foreground text-background font-semibold'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-            )
-            const content = (
-              <>
-                <item.icon className="h-3.5 w-3.5 shrink-0" />
-                <span className="hidden xl:inline tracking-tight">{item.label}</span>
-              </>
-            )
-            return item.external ? (
-              <a
-                key={item.href}
-                href={item.href}
-                title={item.label}
-                className={className}
-                aria-current={active ? 'page' : undefined}
-              >
-                {content}
-              </a>
-            ) : (
-              <Link
-                key={item.href}
-                to={item.href}
-                title={item.label}
-                className={className}
-                aria-current={active ? 'page' : undefined}
-              >
-                {content}
-              </Link>
-            )
-          })}
-        </nav>
+          {/* Desktop Nav Items */}
+          <nav className="hidden md:flex items-center gap-1">
+            {navItems.slice(0, 5).map((item) => {
+              const active = isActive(item.href)
+              return (
+                <Link
+                  key={item.href}
+                  to={item.href}
+                  className={cn(
+                    'flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all',
+                    active
+                      ? 'bg-[#18191D] text-white dark:bg-white dark:text-[#18191D] shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
+                  )}
+                >
+                  <item.icon className="h-3.5 w-3.5" />
+                  <span>{item.label}</span>
+                </Link>
+              )
+            })}
+          </nav>
+        </div>
 
-        {/* Right Side */}
-        <div className="ml-auto flex items-center gap-1.5">
-          {/* Account Switcher — Swiss Segmented Multi-Market Control */}
-          <div className="flex items-center p-0.5 bg-muted/40 rounded-sm border border-border text-xs">
+        {/* Right Side: Monetra Market Switcher Pills & Profile */}
+        <div className="flex items-center gap-2">
+          {/* Segmented Pill Market Switcher */}
+          <div className="flex items-center p-1 bg-muted/60 rounded-full border border-border/80 text-xs">
             <button
               type="button"
-              onClick={() => {
-                window.location.href = '/auth/switch-account?account=inr'
-              }}
+              onClick={() => { window.location.href = '/auth/switch-account?account=inr' }}
               className={cn(
-                'flex items-center gap-1 px-2 py-1 rounded-sm transition-all duration-100 cursor-pointer text-xs',
+                'monetra-pill transition-all text-xs font-semibold',
                 !user?.username?.toLowerCase().includes('usd') &&
                 user?.broker !== 'binance_demo' &&
                 !user?.username?.toLowerCase().includes('binance')
-                  ? 'bg-foreground text-background font-semibold shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
+                  ? 'monetra-pill-active'
+                  : 'monetra-pill-inactive hover:text-foreground'
               )}
-              title="Indian Markets (INR Sandbox)"
             >
-              <span>🇮🇳</span>
-              <span className="hidden xl:inline">INR</span>
+              🇮🇳 INR
             </button>
             <button
               type="button"
-              onClick={() => {
-                window.location.href = '/auth/switch-account?account=usd'
-              }}
+              onClick={() => { window.location.href = '/auth/switch-account?account=usd' }}
               className={cn(
-                'flex items-center gap-1 px-2 py-1 rounded-sm transition-all duration-100 cursor-pointer text-xs',
+                'monetra-pill transition-all text-xs font-semibold',
                 user?.username?.toLowerCase().includes('usd') &&
                 user?.broker !== 'binance_demo' &&
                 !user?.username?.toLowerCase().includes('binance')
-                  ? 'bg-foreground text-background font-semibold shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
+                  ? 'monetra-pill-active'
+                  : 'monetra-pill-inactive hover:text-foreground'
               )}
-              title="Forex & Crypto (USD Sandbox)"
             >
-              <span>🌐</span>
-              <span className="hidden xl:inline">USD</span>
+              🌐 USD
             </button>
             <button
               type="button"
-              onClick={() => {
-                window.location.href = '/auth/switch-account?account=binance'
-              }}
+              onClick={() => { window.location.href = '/auth/switch-account?account=binance' }}
               className={cn(
-                'flex items-center gap-1 px-2 py-1 rounded-sm transition-all duration-100 cursor-pointer text-xs',
+                'monetra-pill transition-all text-xs font-semibold',
                 user?.broker === 'binance_demo' || user?.username?.toLowerCase().includes('binance')
-                  ? 'bg-foreground text-background font-semibold shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
+                  ? 'monetra-pill-active'
+                  : 'monetra-pill-inactive hover:text-foreground'
               )}
-              title="Binance Official Demo"
             >
-              <span>🟡</span>
-              <span className="hidden xl:inline">Binance</span>
+              🟡 Binance
             </button>
           </div>
-
-          {/* Broker Badge */}
-          {user?.broker && (
-            <span className="hidden lg:inline-flex text-[10px] font-mono uppercase tracking-wider font-semibold border border-border bg-card rounded-sm px-1.5 py-0.5 text-foreground">
-              {user.broker}
-            </span>
-          )}
-
-          {/* Mode Badge */}
-          <Badge
-            variant={appMode === 'live' ? 'default' : 'secondary'}
-            className={cn(
-              'text-[10px] font-medium rounded-md px-1.5 py-0',
-              appMode === 'analyzer' && 'bg-purple-500 hover:bg-purple-600 text-white'
-            )}
-          >
-            <span className="hidden lg:inline">{appMode === 'live' ? 'Live Mode' : 'Analyze'}</span>
-            <span className="lg:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
-          </Badge>
-
-          {/* Mode Toggle */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 rounded-lg"
-            onClick={handleModeToggle}
-            disabled={isTogglingMode}
-            title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
-          >
-            {isTogglingMode ? (
-              <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-            ) : appMode === 'live' ? (
-              <Zap className="h-3.5 w-3.5" />
-            ) : (
-              <BarChart3 className="h-3.5 w-3.5" />
-            )}
-          </Button>
 
           {/* Theme Toggle */}
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 rounded-lg"
             onClick={toggleMode}
-            disabled={appMode !== 'live'}
-            title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            className="rounded-full w-8 h-8 hover:bg-muted"
+            title="Toggle theme"
           >
-            {mode === 'light' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+            {mode === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
 
-          {/* Profile Dropdown */}
+          {/* User Profile */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-7 w-7 rounded-full bg-foreground text-background text-xs font-semibold"
-                aria-label="Open user menu"
+                className="rounded-full w-8 h-8 bg-muted hover:bg-muted/80 text-foreground font-bold text-xs"
               >
-                {user?.username?.[0]?.toUpperCase() || 'O'}
+                {user?.username ? user.username.charAt(0).toUpperCase() : 'U'}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56 rounded-xl">
-              {filteredProfileMenuItems.map((item) =>
-                item.external ? (
-                  <DropdownMenuItem key={item.href} asChild className="cursor-pointer rounded-lg">
-                    <a href={item.href} className="flex items-center">
-                      <item.icon className="h-4 w-4 mr-2" />
-                      {item.label}
-                    </a>
-                  </DropdownMenuItem>
-                ) : (
-                  <DropdownMenuItem
-                    key={item.href}
-                    onSelect={() => navigate(item.href)}
-                    className="cursor-pointer rounded-lg"
-                  >
-                    <item.icon className="h-4 w-4 mr-2" />
-                    {item.label}
-                  </DropdownMenuItem>
-                )
-              )}
-              <DropdownMenuItem asChild className="rounded-lg">
-                <a
-                  href="https://docs.openalgo.in"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2"
-                >
-                  <BookOpen className="h-4 w-4" />
-                  Docs
-                </a>
+            <DropdownMenuContent align="end" className="w-56 rounded-2xl p-2 shadow-lg">
+              <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                Signed in as <strong className="text-foreground">{user?.username}</strong>
+              </div>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={toggleMode}
+                className="rounded-xl cursor-pointer"
+              >
+                {mode === 'dark' ? 'Light Theme' : 'Dark Theme'}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() => setShowLogoutDialog(true)}
-                className="text-destructive focus:text-destructive rounded-lg"
+                className="rounded-xl text-destructive cursor-pointer"
               >
                 <LogOut className="h-4 w-4 mr-2" />
-                Logout
+                Sign Out
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
