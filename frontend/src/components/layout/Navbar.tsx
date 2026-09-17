@@ -190,28 +190,28 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
         {/* Logo & Terminal Status */}
         <Link to="/dashboard" className="flex items-center gap-2.5 mr-5 group">
           <div className="relative flex items-center justify-center">
-            <img src="/logo.png" alt="OpenAlgo" className="h-7 w-7 rounded-lg ring-1 ring-border/60 group-hover:ring-emerald-500/50 transition-all" />
+            <img src="/logo.png" alt="OpenAlgo" className="h-7 w-7 rounded-sm ring-1 ring-border group-hover:ring-foreground transition-all" />
           </div>
           <div className="hidden sm:flex items-center gap-2">
-            <span className="font-bold tracking-tight text-sm text-foreground">
+            <span className="font-extrabold tracking-tight text-sm text-foreground">
               OpenAlgo
             </span>
-            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-[10px] font-mono font-semibold uppercase tracking-wider bg-transparent text-foreground border border-border">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
               TERMINAL
             </span>
           </div>
         </Link>
 
-        {/* Desktop Navigation — high-craft terminal tabs */}
-        <nav className="hidden md:flex items-center gap-1">
+        {/* Desktop Navigation — Swiss precision tabs */}
+        <nav className="hidden md:flex items-center gap-0.5">
           {navItems.map((item) => {
             const active = isActive(item.href)
             const className = cn(
-              'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-all duration-150 relative',
+              'flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-xs font-medium transition-all duration-100',
               active
-                ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
+                ? 'bg-foreground text-background font-semibold'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
             )
             const content = (
               <>
@@ -244,20 +244,20 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
         </nav>
 
         {/* Right Side */}
-        <div className="ml-auto flex items-center gap-2">
-          {/* Account Switcher — Tactile Multi-Market Control */}
-          <div className="flex items-center p-0.5 bg-muted/60 dark:bg-muted/40 rounded-lg border border-border/60 text-xs">
+        <div className="ml-auto flex items-center gap-1.5">
+          {/* Account Switcher — Swiss Segmented Multi-Market Control */}
+          <div className="flex items-center p-0.5 bg-muted/40 rounded-sm border border-border text-xs">
             <button
               type="button"
               onClick={() => {
                 window.location.href = '/auth/switch-account?account=inr'
               }}
               className={cn(
-                'flex items-center gap-1 px-2 py-1 rounded-md transition-all duration-150 cursor-pointer text-xs',
+                'flex items-center gap-1 px-2 py-1 rounded-sm transition-all duration-100 cursor-pointer text-xs',
                 !user?.username?.toLowerCase().includes('usd') &&
                 user?.broker !== 'binance_demo' &&
                 !user?.username?.toLowerCase().includes('binance')
-                  ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                  ? 'bg-foreground text-background font-semibold shadow-xs'
                   : 'text-muted-foreground hover:text-foreground'
               )}
               title="Indian Markets (INR Sandbox)"
@@ -271,11 +271,11 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
                 window.location.href = '/auth/switch-account?account=usd'
               }}
               className={cn(
-                'flex items-center gap-1 px-2 py-1 rounded-md transition-all duration-150 cursor-pointer text-xs',
+                'flex items-center gap-1 px-2 py-1 rounded-sm transition-all duration-100 cursor-pointer text-xs',
                 user?.username?.toLowerCase().includes('usd') &&
                 user?.broker !== 'binance_demo' &&
                 !user?.username?.toLowerCase().includes('binance')
-                  ? 'bg-emerald-600 text-white font-semibold shadow-xs'
+                  ? 'bg-foreground text-background font-semibold shadow-xs'
                   : 'text-muted-foreground hover:text-foreground'
               )}
               title="Forex & Crypto (USD Sandbox)"
@@ -289,9 +289,9 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
                 window.location.href = '/auth/switch-account?account=binance'
               }}
               className={cn(
-                'flex items-center gap-1 px-2 py-1 rounded-md transition-all duration-150 cursor-pointer text-xs',
+                'flex items-center gap-1 px-2 py-1 rounded-sm transition-all duration-100 cursor-pointer text-xs',
                 user?.broker === 'binance_demo' || user?.username?.toLowerCase().includes('binance')
-                  ? 'bg-amber-500 text-black font-semibold shadow-xs'
+                  ? 'bg-foreground text-background font-semibold shadow-xs'
                   : 'text-muted-foreground hover:text-foreground'
               )}
               title="Binance Official Demo"
@@ -303,12 +303,9 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
 
           {/* Broker Badge */}
           {user?.broker && (
-            <Badge
-              variant="outline"
-              className="hidden lg:flex text-[10px] font-mono uppercase tracking-wider font-semibold border-border/80 bg-card/60 rounded px-1.5 py-0.5"
-            >
+            <span className="hidden lg:inline-flex text-[10px] font-mono uppercase tracking-wider font-semibold border border-border bg-card rounded-sm px-1.5 py-0.5 text-foreground">
               {user.broker}
-            </Badge>
+            </span>
           )}
 
           {/* Mode Badge */}

@@ -417,17 +417,17 @@ export default function Dashboard() {
       {/* Account Switcher & Equity Hero */}
       <div className="terminal-panel p-3 md:p-4 space-y-3">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-          {/* Segmented Market Controls */}
-          <div className="inline-flex p-1 bg-muted/60 dark:bg-muted/40 rounded-lg border border-border/60">
+          {/* Segmented Market Controls — Swiss Monochrome */}
+          <div className="inline-flex p-0.5 bg-muted/40 rounded-sm border border-border">
             <button
               type="button"
               onClick={() => {
                 window.location.href = '/auth/switch-account?account=inr'
               }}
               className={cn(
-                'flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer',
+                'flex items-center gap-2 px-3 py-1.5 rounded-sm text-xs font-medium transition-all cursor-pointer',
                 isIndianSandbox
-                  ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                  ? 'bg-foreground text-background font-semibold shadow-xs'
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
@@ -435,9 +435,9 @@ export default function Dashboard() {
               <span>Indian Markets</span>
               <span
                 className={cn(
-                  'text-[10px] px-1.5 py-0.5 rounded font-mono font-bold',
+                  'text-[10px] px-1.5 py-0.2 rounded-sm font-mono font-bold',
                   isIndianSandbox
-                    ? 'bg-primary-foreground/20 text-primary-foreground'
+                    ? 'bg-background/20 text-background'
                     : 'bg-muted text-muted-foreground'
                 )}
               >
@@ -453,9 +453,9 @@ export default function Dashboard() {
                 window.location.href = '/auth/switch-account?account=usd'
               }}
               className={cn(
-                'flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer',
+                'flex items-center gap-2 px-3 py-1.5 rounded-sm text-xs font-medium transition-all cursor-pointer',
                 isUsdSandbox
-                  ? 'bg-emerald-600 text-white font-semibold shadow-xs'
+                  ? 'bg-foreground text-background font-semibold shadow-xs'
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
@@ -463,8 +463,8 @@ export default function Dashboard() {
               <span>USD Sandbox</span>
               <span
                 className={cn(
-                  'text-[10px] px-1.5 py-0.5 rounded font-mono font-bold',
-                  isUsdSandbox ? 'bg-white/20 text-white' : 'bg-muted text-muted-foreground'
+                  'text-[10px] px-1.5 py-0.2 rounded-sm font-mono font-bold',
+                  isUsdSandbox ? 'bg-background/20 text-background' : 'bg-muted text-muted-foreground'
                 )}
               >
                 {isUsdSandbox && marginData
@@ -479,9 +479,9 @@ export default function Dashboard() {
                 window.location.href = '/auth/switch-account?account=binance'
               }}
               className={cn(
-                'flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer',
+                'flex items-center gap-2 px-3 py-1.5 rounded-sm text-xs font-medium transition-all cursor-pointer',
                 isBinance
-                  ? 'bg-amber-500 text-black font-semibold shadow-xs'
+                  ? 'bg-foreground text-background font-semibold shadow-xs'
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
@@ -489,8 +489,8 @@ export default function Dashboard() {
               <span>Binance Demo</span>
               <span
                 className={cn(
-                  'text-[10px] px-1.5 py-0.5 rounded font-mono font-bold',
-                  isBinance ? 'bg-black/20 text-black' : 'bg-muted text-muted-foreground'
+                  'text-[10px] px-1.5 py-0.2 rounded-sm font-mono font-bold',
+                  isBinance ? 'bg-background/20 text-background' : 'bg-muted text-muted-foreground'
                 )}
               >
                 {isBinance && marginData
@@ -676,20 +676,20 @@ export default function Dashboard() {
       {/* Official Binance Live Connection & Portfolio (Shown when Binance Demo is active) */}
       {isBinance && (
         <div className="space-y-4 md:space-y-5">
-          {/* Live Connection Banner */}
-          <div className="terminal-panel p-3.5 md:p-4 border-amber-500/30 bg-amber-500/5 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          {/* Live Connection Banner — Swiss Monochrome */}
+          <div className="terminal-panel p-3.5 md:p-4 border-border bg-card flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              <div className="relative flex h-2.5 w-2.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+              <div className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="font-semibold text-foreground text-sm tracking-tight">
+                  <span className="font-bold text-foreground text-sm tracking-tight">
                     Official Binance Demo Engine Active
                   </span>
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25">
-                    NON-SIMULATED
+                  <span className="px-1.5 py-0.2 rounded-sm text-[10px] font-mono font-semibold uppercase tracking-wider bg-muted text-foreground border border-border">
+                    LIVE REST API
                   </span>
                 </div>
                 <p className="text-[11px] font-mono text-muted-foreground mt-0.5">
@@ -703,7 +703,7 @@ export default function Dashboard() {
                 href="https://demo.binance.com/en-IN/trade"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-muted/60 hover:bg-muted border border-border/80 text-foreground transition-colors font-medium text-xs"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm bg-background hover:bg-muted border border-border text-foreground transition-colors font-medium text-xs"
               >
                 <span>Spot Web</span>
                 <ExternalLink className="h-3 w-3" />
@@ -712,7 +712,7 @@ export default function Dashboard() {
                 href="https://demo.binance.com/en-IN/futures"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-muted/60 hover:bg-muted border border-border/80 text-foreground transition-colors font-medium text-xs"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm bg-background hover:bg-muted border border-border text-foreground transition-colors font-medium text-xs"
               >
                 <span>Futures Web</span>
                 <ExternalLink className="h-3 w-3" />
@@ -726,10 +726,10 @@ export default function Dashboard() {
             <div className="terminal-panel p-4 space-y-3">
               <div className="flex items-center justify-between pb-2 border-b border-border/50">
                 <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                  <Coins className="h-4 w-4 text-amber-500" />
+                  <Coins className="h-4 w-4 text-foreground" />
                   <span>Spot Demo Assets</span>
                 </div>
-                <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded bg-muted">
+                <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded-sm bg-muted text-foreground border border-border/60">
                   ${marginData?.spot_usdt || '0.00'} USDT Free
                 </span>
               </div>

@@ -49,7 +49,7 @@ interface ThemeStore {
 export const useThemeStore = create<ThemeStore>()(
   persist(
     (set, get) => ({
-      mode: 'light',
+      mode: 'dark',
       color: 'zinc',
       appMode: 'live',
       isTogglingMode: false,
