@@ -4385,9 +4385,16 @@ export class TradingTerminal {
     }
     if (!loaded && !this.destroyed) {
       try {
-        const rows = await this.search('BHEL', 'NSE')
-        const bhel = rows.find((r) => r.symbol === 'BHEL' && r.exchange === 'NSE')
-        if (bhel) await this.loadSymbol(bhel)
+        const isCryptoBroker = window.location.search.includes("binance") || document.cookie.includes("binance")
+        const defaultSym = isCryptoBroker ? "BTCUSDT" : "BHEL"
+        const defaultEx = isCryptoBroker ? "CRYPTO" : "NSE"
+        const rows = await this.search(defaultSym, defaultEx)
+        const matched = rows.find((r) => r.symbol === defaultSym)
+        if (matched) await this.loadSymbol(matched)
+        else {
+          const bhel = (await this.search("BHEL", "NSE")).find((r) => r.symbol === "BHEL")
+          if (bhel) await this.loadSymbol(bhel)
+        }
       } catch {
         /* leave the chart empty; the user can search */
       }

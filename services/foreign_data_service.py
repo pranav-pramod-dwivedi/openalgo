@@ -251,17 +251,21 @@ def get_foreign_history(
         now = datetime.now()
         import random
 
+        # Align to standard 5-minute boundaries (300 seconds) so bars never overlap
+        now_ts = int(now.timestamp())
+        latest_bucket = (now_ts // 300) * 300
+
         curr_p = base_p
         for i in range(60, 0, -1):
-            t = now - timedelta(minutes=i * 5)
-            step = curr_p * random.uniform(-0.0008, 0.0008)
+            bucket_ts = latest_bucket - (i * 300)
+            step = curr_p * random.uniform(-0.0006, 0.0006)
             o = curr_p
             c = round(curr_p + step, 5)
-            h = round(max(o, c) + abs(step) * random.uniform(0.1, 0.5), 5)
-            l = round(min(o, c) - abs(step) * random.uniform(0.1, 0.5), 5)
+            h = round(max(o, c) + abs(step) * random.uniform(0.1, 0.4), 5)
+            l = round(min(o, c) - abs(step) * random.uniform(0.1, 0.4), 5)
             curr_p = c
             candles.append({
-                "timestamp": int(t.timestamp()),
+                "timestamp": bucket_ts,
                 "open": o,
                 "high": h,
                 "low": l,
