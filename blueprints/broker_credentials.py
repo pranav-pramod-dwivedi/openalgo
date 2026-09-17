@@ -366,16 +366,18 @@ def get_capabilities():
         return jsonify({"status": "error", "message": "No broker in session"}), 400
 
     capabilities = get_broker_capabilities(broker)
-    if not capabilities:
-        # Fallback for brokers without plugin.json capabilities
+    if broker == "sandbox" or not capabilities:
+        # Full multi-market capabilities for sandbox mode
         return jsonify(
             {
                 "status": "success",
                 "data": {
                     "broker_name": broker,
                     "broker_type": "IN_stock",
-                    "supported_exchanges": [],
-                    "leverage_config": False,
+                    "supported_exchanges": [
+                        "NSE", "BSE", "NFO", "BFO", "CDS", "MCX", "CRYPTO", "FOREX"
+                    ],
+                    "leverage_config": True,
                 },
             }
         )

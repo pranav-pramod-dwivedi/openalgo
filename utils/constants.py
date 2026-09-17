@@ -18,11 +18,13 @@ EXCHANGE_BSE_INDEX = "BSE_INDEX"  # BSE Index
 EXCHANGE_MCX_INDEX = "MCX_INDEX"  # MCX Index (declared by Angel + Zerodha plugins)
 EXCHANGE_GLOBAL_INDEX = "GLOBAL_INDEX"  # Global indices (US30, JAPAN225, HANGSENG, GIFTNIFTY, etc.)
 EXCHANGE_CRYPTO = "CRYPTO"  # Crypto Exchanges (broker-agnostic; brexchange carries broker name)
+EXCHANGE_FOREX = "FOREX"  # Global Forex (EURUSD, GBPUSD, USDJPY, XAUUSD, etc.)
 
 # Set of all crypto-family exchanges.
 # Use `exchange in CRYPTO_EXCHANGES` instead of `exchange == "CRYPTO"` so that
 # onboarding a second crypto exchange (e.g. BINANCE, BYBIT) is a one-line change here.
 CRYPTO_EXCHANGES: set[str] = {EXCHANGE_CRYPTO}
+FOREX_EXCHANGES: set[str] = {EXCHANGE_FOREX}
 
 # Set of broker names that map to crypto exchanges.
 # Used to select the correct download cutoff timezone (UTC vs IST).
@@ -64,6 +66,7 @@ VALID_EXCHANGES = [
     EXCHANGE_MCX_INDEX,
     EXCHANGE_GLOBAL_INDEX,
     EXCHANGE_CRYPTO,
+    EXCHANGE_FOREX,
 ]
 
 # Product Types

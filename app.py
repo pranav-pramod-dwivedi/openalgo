@@ -629,7 +629,7 @@ def create_app():
         if path.startswith(("/assets/", "/static/")) or "." in path.rsplit("/", 1)[-1]:
             return "Not Found", 404
 
-        return serve_react_app(), 404
+        return serve_react_app(), 200
 
     @app.errorhandler(500)
     def internal_server_error(e):

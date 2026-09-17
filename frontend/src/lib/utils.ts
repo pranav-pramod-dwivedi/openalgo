@@ -23,13 +23,21 @@ export function sanitizeCSV(value: string | number | null | undefined): string {
   return str
 }
 
+import { useAuthStore } from '@/stores/authStore'
+
 /**
- * Returns a currency formatter bound to the active broker.
- * - deltaexchange → USD ($)
- * - all other brokers  → INR (₹)
+ * Returns a currency formatter bound to the active broker and account.
+ * - deltaexchange or openalgo_usd → USD ($)
+ * - all other brokers / openalgo_admin  → INR (₹)
  */
 export function makeFormatCurrency(broker?: string | null): (value: number) => string {
-  const isUSD = broker === 'deltaexchange'
+  const user = useAuthStore.getState().user
+  const uname = user?.username ? user.username.toLowerCase() : ''
+  const isUSD =
+    broker === 'deltaexchange' ||
+    broker === 'binance_demo' ||
+    uname.includes('usd') ||
+    uname.includes('binance')
   return (value: number) =>
     isUSD
       ? new Intl.NumberFormat('en-US', {

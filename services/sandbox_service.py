@@ -66,6 +66,11 @@ def sandbox_place_order(
         if not user_id:
             return False, {"status": "error", "message": "Invalid API key", "mode": "analyze"}, 403
 
+        # Route foreign markets (FOREX, CRYPTO) or USD requests to dedicated USD account ($100 USD)
+        exchange = str(order_data.get("exchange", "")).upper()
+        if exchange in ["FOREX", "CRYPTO"] or str(order_data.get("account", "")).lower() == "usd":
+            user_id = "openalgo_usd"
+
         # Initialize order manager for user
         order_manager = OrderManager(user_id)
 
@@ -181,6 +186,10 @@ def sandbox_get_orderbook(
         if not user_id:
             return False, {"status": "error", "message": "Invalid API key", "mode": "analyze"}, 403
 
+        acc = str(original_data.get("account", "")).lower()
+        if acc == "usd" or original_data.get("currency") == "USD":
+            user_id = "openalgo_usd"
+
         order_manager = OrderManager(user_id)
         success, response, status_code = order_manager.get_orderbook()
 
@@ -233,6 +242,10 @@ def sandbox_get_positions(
         if not user_id:
             return False, {"status": "error", "message": "Invalid API key", "mode": "analyze"}, 403
 
+        acc = str(original_data.get("account", "")).lower()
+        if acc == "usd" or original_data.get("currency") == "USD":
+            user_id = "openalgo_usd"
+
         position_manager = PositionManager(user_id)
         success, response, status_code = position_manager.get_open_positions(update_mtm=True)
 
@@ -279,6 +292,10 @@ def sandbox_get_tradebook(
         if not user_id:
             return False, {"status": "error", "message": "Invalid API key", "mode": "analyze"}, 403
 
+        acc = str(original_data.get("account", "")).lower()
+        if acc == "usd" or original_data.get("currency") == "USD":
+            user_id = "openalgo_usd"
+
         position_manager = PositionManager(user_id)
         success, response, status_code = position_manager.get_tradebook()
 
@@ -301,6 +318,10 @@ def sandbox_get_funds(
         user_id = get_user_id_from_apikey(api_key)
         if not user_id:
             return False, {"status": "error", "message": "Invalid API key", "mode": "analyze"}, 403
+
+        acc = str(original_data.get("account", "")).lower()
+        if acc == "usd" or original_data.get("currency") == "USD":
+            user_id = "openalgo_usd"
 
         funds = get_user_funds(user_id)
 

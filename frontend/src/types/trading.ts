@@ -1,7 +1,7 @@
 export interface Position {
   symbol: string
   exchange: string
-  product: 'MIS' | 'NRML' | 'CNC'
+  product: 'MIS' | 'NRML' | 'CNC' | 'SPOT' | 'FUTURES' | string
   quantity: number
   average_price: number
   ltp: number
@@ -19,7 +19,7 @@ export interface Order {
   price: number
   trigger_price: number
   pricetype: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
-  product: 'MIS' | 'NRML' | 'CNC'
+  product: 'MIS' | 'NRML' | 'CNC' | 'SPOT' | 'FUTURES' | string
   orderid: string
   order_status: 'complete' | 'rejected' | 'cancelled' | 'open' | 'pending' | 'trigger pending'
   timestamp: string
@@ -32,6 +32,8 @@ export interface Trade {
   quantity: number
   average_price: number
   trade_value: number
+  money_change?: number
+  pnl?: number
   product: string
   orderid: string
   timestamp: string

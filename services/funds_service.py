@@ -48,7 +48,9 @@ def get_funds_with_auth(
     # If original_data is None (internal call from dashboard), use live broker
     from database.settings_db import get_analyze_mode
 
-    if get_analyze_mode() and original_data:
+    from database.settings_db import get_analyze_mode
+
+    if broker != "binance_demo" and (get_analyze_mode() or broker == "sandbox") and original_data:
         from services.sandbox_service import sandbox_get_funds
 
         api_key = original_data.get("apikey")
@@ -65,6 +67,11 @@ def get_funds_with_auth(
 
         return sandbox_get_funds(api_key, original_data)
 
+    if broker == "binance_demo":
+        from services.binance_demo_service import binance_demo_service
+        funds = binance_demo_service.get_margin_data()
+        return True, {"status": "success", "data": funds}, 200
+
     broker_module = import_broker_module(broker)
     if broker_module is None:
         return False, {"status": "error", "message": "Broker-specific module not found"}, 404
@@ -80,34 +87,32 @@ def get_funds_with_auth(
 
 
 def get_funds(
-    api_key: str | None = None, auth_token: str | None = None, broker: str | None = None
+    api_key: str | None = None,
+    auth_token: str | None = None,
+    broker: str | None = None,
+    original_data: dict[str, Any] | None = None,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Get account funds and margin details from the broker.
     Supports both API-based authentication and direct internal calls.
-
-    Args:
-        api_key: OpenAlgo API key (for API-based calls)
-        auth_token: Direct broker authentication token (for internal calls)
-        broker: Direct broker name (for internal calls)
-
-    Returns:
-        Tuple containing:
-        - Success status (bool)
-        - Response data (dict)
-        - HTTP status code (int)
     """
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
-        original_data = {"apikey": api_key}
-        return get_funds_with_auth(AUTH_TOKEN, broker_name, original_data)
+        data = original_data or {"apikey": api_key}
+        return get_funds_with_auth(AUTH_TOKEN, broker_name, data)
+
+    from database.settings_db import get_analyze_mode
+    if broker != "binance_demo" and (get_analyze_mode() or broker == "sandbox"):
+        from services.sandbox_service import sandbox_get_funds
+        data = original_data or ({"apikey": api_key} if api_key else {})
+        return sandbox_get_funds(api_key or "openalgo_admin", data)
 
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
-        return get_funds_with_auth(auth_token, broker, None)
+        return get_funds_with_auth(auth_token, broker, original_data)
 
     # Case 3: Invalid parameters
     else:

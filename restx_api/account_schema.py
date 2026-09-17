@@ -3,18 +3,26 @@ from marshmallow import INCLUDE, Schema, fields, validate
 
 class FundsSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    currency = fields.Str(required=False)
+    account = fields.Str(required=False)
 
 
 class OrderbookSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    currency = fields.Str(required=False)
+    account = fields.Str(required=False)
 
 
 class TradebookSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    currency = fields.Str(required=False)
+    account = fields.Str(required=False)
 
 
 class PositionbookSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    currency = fields.Str(required=False)
+    account = fields.Str(required=False)
 
 
 class HoldingsSchema(Schema):

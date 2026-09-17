@@ -208,6 +208,12 @@ class ExecutionEngine:
         Returns None if quote cannot be fetched (permission error, API error, etc.)
         """
         try:
+            from services.foreign_data_service import is_foreign_exchange
+            if is_foreign_exchange(exchange):
+                success, response, status_code = get_quotes(symbol=symbol, exchange=exchange)
+                if success and "data" in response:
+                    return response["data"]
+
             # Get any user's API key for fetching quotes
             from database.auth_db import ApiKeys, decrypt_token
 

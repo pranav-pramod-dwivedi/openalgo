@@ -55,6 +55,12 @@ const DAYS_OF_WEEK = [
 ]
 
 const CAPITAL_OPTIONS = [
+  { value: '100', label: '$100 / ₹100 (Starter)' },
+  { value: '500', label: '$500 / ₹500' },
+  { value: '1000', label: '$1,000 / ₹1,000' },
+  { value: '5000', label: '$5,000 / ₹5,000' },
+  { value: '10000', label: '$10,000 / ₹10,000' },
+  { value: '50000', label: '$50,000 / ₹50,000' },
   { value: '100000', label: '1,00,000 (1 Lakh)' },
   { value: '500000', label: '5,00,000 (5 Lakhs)' },
   { value: '1000000', label: '10,00,000 (10 Lakhs)' },

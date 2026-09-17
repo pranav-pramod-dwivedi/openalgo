@@ -882,6 +882,12 @@ class PositionManager:
     def _fetch_quote(self, symbol, exchange):
         """Fetch real-time quote for a symbol using API key"""
         try:
+            from services.foreign_data_service import is_foreign_exchange
+            if is_foreign_exchange(exchange):
+                success, response, status_code = get_quotes(symbol=symbol, exchange=exchange)
+                if success and "data" in response:
+                    return response["data"]
+
             # Get any user's API key for fetching quotes
             from database.auth_db import ApiKeys, decrypt_token
 
@@ -920,6 +926,21 @@ class PositionManager:
         quote_cache = {}
 
         if not symbols_list:
+            return quote_cache
+
+        from services.foreign_data_service import is_foreign_exchange, get_foreign_quote
+        foreign_symbols = [s for s in symbols_list if is_foreign_exchange(s[1])]
+        domestic_symbols = [s for s in symbols_list if not is_foreign_exchange(s[1])]
+
+        for sym, ex in foreign_symbols:
+            try:
+                q = get_foreign_quote(sym, ex)
+                if q:
+                    quote_cache[(sym, ex)] = q
+            except Exception as e:
+                logger.debug(f"Failed to fetch foreign quote for {sym}: {e}")
+
+        if not domestic_symbols:
             return quote_cache
 
         try:

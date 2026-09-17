@@ -32,7 +32,9 @@ class Positionbook(Resource):
             api_key = positionbook_data["apikey"]
 
             # Call the service function to get positionbook data with API key
-            success, response_data, status_code = get_positionbook(api_key=api_key)
+            success, response_data, status_code = get_positionbook(
+                api_key=api_key, original_data=request.json
+            )
 
             return make_response(jsonify(response_data), status_code)
 

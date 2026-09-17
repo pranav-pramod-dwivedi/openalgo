@@ -32,7 +32,9 @@ class Tradebook(Resource):
             api_key = tradebook_data["apikey"]
 
             # Call the service function to get tradebook data with API key
-            success, response_data, status_code = get_tradebook(api_key=api_key)
+            success, response_data, status_code = get_tradebook(
+                api_key=api_key, original_data=request.json
+            )
 
             return make_response(jsonify(response_data), status_code)
 

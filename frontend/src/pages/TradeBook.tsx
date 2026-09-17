@@ -233,6 +233,7 @@ export default function TradeBook() {
         'Qty',
         'Price',
         'Trade Value',
+        'Money Change',
         'Order ID',
         'Time',
       ]
@@ -244,6 +245,7 @@ export default function TradeBook() {
         sanitizeCSV(t.quantity),
         sanitizeCSV(t.average_price),
         sanitizeCSV(t.trade_value),
+        sanitizeCSV(t.money_change !== undefined ? t.money_change : (t.action === 'BUY' ? -t.trade_value : t.trade_value)),
         sanitizeCSV(t.orderid),
         sanitizeCSV(t.timestamp),
       ])
@@ -527,6 +529,7 @@ export default function TradeBook() {
                     <TableHead className="text-right">Qty</TableHead>
                     <TableHead className="text-right">Price</TableHead>
                     <TableHead className="text-right">Trade Value</TableHead>
+                    <TableHead className="text-right">Money Change</TableHead>
                     <TableHead>Order ID</TableHead>
                     <TableHead
                       onClick={() => requestSort('timestamp')}
@@ -575,6 +578,40 @@ export default function TradeBook() {
                       </TableCell>
                       <TableCell className="text-right font-mono">
                         {formatCurrency(trade.trade_value)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {(() => {
+                          const val = trade.money_change !== undefined
+                            ? Number(trade.money_change)
+                            : (trade.action === 'BUY' ? -Number(trade.trade_value) : Number(trade.trade_value))
+                          const isPositive = val > 0
+                          const isNegative = val < 0
+                          return (
+                            <div className="flex flex-col items-end">
+                              <span
+                                className={cn(
+                                  'font-semibold',
+                                  isPositive
+                                    ? 'text-emerald-600 dark:text-emerald-400'
+                                    : isNegative
+                                      ? 'text-rose-600 dark:text-rose-400'
+                                      : 'text-muted-foreground'
+                                )}
+                              >
+                                {isPositive ? '+' : ''}
+                                {formatCurrency(val)}
+                              </span>
+                              {trade.pnl !== undefined && Number(trade.pnl) !== 0 && (
+                                <span className={cn(
+                                  'text-[10px] font-medium leading-none mt-0.5',
+                                  Number(trade.pnl) > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500'
+                                )}>
+                                  P&L: {Number(trade.pnl) > 0 ? '+' : ''}{formatCurrency(trade.pnl)}
+                                </span>
+                              )}
+                            </div>
+                          )
+                        })()}
                       </TableCell>
                       <TableCell className="font-mono text-xs">{trade.orderid}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">

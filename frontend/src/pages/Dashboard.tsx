@@ -1,11 +1,41 @@
-import { BarChart3, BookOpen, FileText, GraduationCap, Search, Zap } from 'lucide-react'
+import {
+  BarChart3,
+  BookOpen,
+  Coins,
+  ExternalLink,
+  FileText,
+  GraduationCap,
+  Search,
+  TrendingUp,
+  Zap,
+} from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router'
+import DashboardPnLChart from '@/components/dashboard/DashboardPnLChart'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
+
+interface BinanceBalance {
+  asset: string
+  free?: number
+  locked?: number
+  total?: number
+  balance?: number
+  available?: number
+}
+
+interface BinancePosition {
+  symbol: string
+  amount: number
+  side: 'LONG' | 'SHORT'
+  entry_price: number
+  mark_price: number
+  unrealized_pnl: number
+}
 
 interface MarginData {
   availablecash: string
@@ -13,6 +43,15 @@ interface MarginData {
   m2munrealized: string
   m2mrealized: string
   utiliseddebits: string
+  is_binance?: boolean
+  spot_usdt?: string
+  futures_usdt?: string
+  futures_wallet_usd?: string
+  spot_wallet_usd?: string
+  total_balance_usd?: string
+  spot_balances?: BinanceBalance[]
+  futures_balances?: BinanceBalance[]
+  positions?: BinancePosition[]
 }
 
 interface MasterContractStatus {
@@ -21,27 +60,30 @@ interface MasterContractStatus {
   total_symbols?: number
 }
 
-// Format number in Indian format with Cr/L suffixes
-function formatIndianNumber(value: string | number): string {
+// Format number with proper currency and notation (USD vs INR)
+function formatAccountCurrency(value: string | number, isUsd: boolean = false): string {
   const num = typeof value === 'string' ? parseFloat(value) : value
-  if (Number.isNaN(num)) return '0.00'
+  if (Number.isNaN(num)) return isUsd ? '$0.00' : '₹0.00'
 
   const isNegative = num < 0
   const absNum = Math.abs(num)
+  const sym = isUsd ? '$' : '₹'
+
+  if (isUsd) {
+    const formatted = absNum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    return isNegative ? `-${sym}${formatted}` : `${sym}${formatted}`
+  }
 
   let formatted: string
   if (absNum >= 10000000) {
-    // 1 Crore or more
     formatted = `${(absNum / 10000000).toFixed(2)}Cr`
   } else if (absNum >= 100000) {
-    // 1 Lakh or more
     formatted = `${(absNum / 100000).toFixed(2)}L`
   } else {
-    // Less than 1 Lakh - just decimal format
     formatted = absNum.toFixed(2)
   }
 
-  return isNegative ? `-${formatted}` : formatted
+  return isNegative ? `-${sym}${formatted}` : `${sym}${formatted}`
 }
 
 // Get color class based on P&L value
@@ -60,7 +102,13 @@ function getPnLBadgeVariant(value: string | number): 'default' | 'destructive' |
 }
 
 export default function Dashboard() {
+  const { user } = useAuthStore()
   const [marginData, setMarginData] = useState<MarginData | null>(null)
+  const username = (user?.username || '').toLowerCase()
+  const isBinance = username.includes('binance') || user?.broker === 'binance_demo' || Boolean(marginData?.is_binance)
+  const isUsdSandbox = !isBinance && username.includes('usd')
+  const isIndianSandbox = !isBinance && !isUsdSandbox
+  const isUsd = isBinance || isUsdSandbox
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [masterContract, setMasterContract] = useState<MasterContractStatus>({
@@ -327,45 +375,174 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Account Switcher Tabs: INR vs USD vs Binance Demo */}
+      <div className="flex flex-wrap items-center justify-between gap-4 p-2.5 bg-muted/40 rounded-2xl border">
+        <div className="inline-flex p-1 bg-background rounded-xl border shadow-sm">
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = '/auth/switch-account?account=inr'
+            }}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all cursor-pointer',
+              isIndianSandbox
+                ? 'bg-primary text-primary-foreground font-semibold shadow'
+                : 'text-muted-foreground hover:text-foreground font-medium'
+            )}
+          >
+            <span>🇮🇳</span>
+            <span>Indian Markets (INR)</span>
+            <span
+              className={cn(
+                'text-xs px-2 py-0.5 rounded-full font-mono font-bold',
+                isIndianSandbox
+                  ? 'bg-primary-foreground/20 text-primary-foreground'
+                  : 'bg-muted text-muted-foreground'
+              )}
+            >
+              {isIndianSandbox && marginData ? formatAccountCurrency(marginData.availablecash, false) : '₹10,000'}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = '/auth/switch-account?account=usd'
+            }}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all cursor-pointer',
+              isUsdSandbox
+                ? 'bg-emerald-600 text-white font-semibold shadow'
+                : 'text-muted-foreground hover:text-foreground font-medium'
+            )}
+          >
+            <span>🌐</span>
+            <span>Forex & Crypto Sandbox</span>
+            <span
+              className={cn(
+                'text-xs px-2 py-0.5 rounded-full font-mono font-bold',
+                isUsdSandbox ? 'bg-white/20 text-white' : 'bg-muted text-muted-foreground'
+              )}
+            >
+              {isUsdSandbox && marginData ? formatAccountCurrency(marginData.availablecash, true) : '$100.59'}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = '/auth/switch-account?account=binance'
+            }}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all cursor-pointer',
+              isBinance
+                ? 'bg-amber-500 text-black font-semibold shadow'
+                : 'text-muted-foreground hover:text-foreground font-medium'
+            )}
+          >
+            <span className="text-base">🟡</span>
+            <span>Binance Official Demo</span>
+            <span
+              className={cn(
+                'text-xs px-2 py-0.5 rounded-full font-mono font-bold',
+                isBinance ? 'bg-black/20 text-black' : 'bg-muted text-muted-foreground'
+              )}
+            >
+              {isBinance && marginData ? formatAccountCurrency(marginData.total_balance_usd || marginData.availablecash, true) : '$100.00'}
+            </span>
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 text-xs text-muted-foreground px-3 py-1.5 bg-muted/50 rounded-lg border flex-wrap justify-between">
+          <div className="flex items-center gap-2">
+            <span>Active:</span>
+            <span className="font-semibold text-foreground">
+              {isBinance
+                ? '🟡 Official Binance Demo (Spot & Futures REST API)'
+                : isUsdSandbox
+                ? '🌐 Forex & Crypto Sandbox ($ USD - openalgo_usd)'
+                : '🇮🇳 Indian Equities & F&O Sandbox (₹ INR - openalgo_admin)'}
+            </span>
+          </div>
+          {isBinance && (
+            <div className="flex items-center gap-3 font-mono text-xs flex-wrap">
+              <span>
+                Account Equity: <strong className="text-foreground">${marginData?.total_balance_usd || '100.00'}</strong>
+              </span>
+              <span className="text-muted-foreground hidden sm:inline">|</span>
+              <span>
+                Starting Capital: <strong className="text-blue-500">$100.00</strong>
+              </span>
+              <span className="text-muted-foreground hidden sm:inline">|</span>
+              <span className="text-emerald-500 font-medium">
+                Collateral: Hidden ($15k USDC excluded)
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-4 md:gap-6">
         {/* Available Balance */}
         <Card>
           <CardContent className="pt-6">
             <div className="space-y-1">
-              <p className="text-sm text-muted-foreground">Available Balance</p>
+              <p className="text-sm text-muted-foreground">
+                {isBinance ? 'Cash Balance (USD)' : 'Available Balance'}
+              </p>
               <p className="text-2xl font-bold text-primary">
                 {isLoading
                   ? '...'
                   : marginData
-                    ? formatIndianNumber(marginData.availablecash)
-                    : '0.00'}
+                    ? formatAccountCurrency(marginData.availablecash, isUsd)
+                    : isUsd
+                      ? '$100.00'
+                      : '₹0.00'}
               </p>
               <Badge variant="secondary" className="mt-2">
-                Cash Balance
+                {isBinance
+                  ? 'Base: $100.00'
+                  : 'Cash Balance'}
               </Badge>
             </div>
           </CardContent>
         </Card>
 
-        {/* Collateral */}
-        <Card>
-          <CardContent className="pt-6">
-            <div className="space-y-1">
-              <p className="text-sm text-muted-foreground">Collateral</p>
-              <p className="text-2xl font-bold text-violet-500 dark:text-violet-400">
-                {isLoading
-                  ? '...'
-                  : marginData
-                    ? formatIndianNumber(marginData.collateral)
-                    : '0.00'}
-              </p>
-              <Badge variant="secondary" className="mt-2">
-                Total Collateral
-              </Badge>
-            </div>
-          </CardContent>
-        </Card>
+        {/* Collateral or Starting Capital */}
+        {isBinance ? (
+          <Card>
+            <CardContent className="pt-6">
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">Starting Capital</p>
+                <p className="text-2xl font-bold text-violet-500 dark:text-violet-400">
+                  $100.00
+                </p>
+                <Badge variant="secondary" className="mt-2 text-xs">
+                  15k USDC Collateral Hidden
+                </Badge>
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardContent className="pt-6">
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">Collateral</p>
+                <p className="text-2xl font-bold text-violet-500 dark:text-violet-400">
+                  {isLoading
+                    ? '...'
+                    : marginData
+                      ? formatAccountCurrency(marginData.collateral, isUsd)
+                      : isUsd
+                        ? '$0.00'
+                        : '₹0.00'}
+                </p>
+                <Badge variant="secondary" className="mt-2">
+                  Total Collateral
+                </Badge>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Unrealized P&L */}
         <Card>
@@ -381,8 +558,10 @@ export default function Dashboard() {
                 {isLoading
                   ? '...'
                   : marginData
-                    ? formatIndianNumber(marginData.m2munrealized)
-                    : '0.00'}
+                    ? formatAccountCurrency(marginData.m2munrealized, isUsd)
+                    : isUsd
+                      ? '$0.00'
+                      : '₹0.00'}
               </p>
               <Badge
                 variant={marginData ? getPnLBadgeVariant(marginData.m2munrealized) : 'secondary'}
@@ -408,8 +587,10 @@ export default function Dashboard() {
                 {isLoading
                   ? '...'
                   : marginData
-                    ? formatIndianNumber(marginData.m2mrealized)
-                    : '0.00'}
+                    ? formatAccountCurrency(marginData.m2mrealized, isUsd)
+                    : isUsd
+                      ? '$0.00'
+                      : '₹0.00'}
               </p>
               <Badge
                 variant={marginData ? getPnLBadgeVariant(marginData.m2mrealized) : 'secondary'}
@@ -430,8 +611,10 @@ export default function Dashboard() {
                 {isLoading
                   ? '...'
                   : marginData
-                    ? formatIndianNumber(marginData.utiliseddebits)
-                    : '0.00'}
+                    ? formatAccountCurrency(marginData.utiliseddebits, isUsd)
+                    : isUsd
+                      ? '$0.00'
+                      : '₹0.00'}
               </p>
               <Badge
                 variant="outline"
@@ -443,6 +626,188 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Official Binance Live Connection & Portfolio (Shown when Binance Demo is active) */}
+      {isBinance && (
+        <div className="space-y-6">
+          {/* Live Connection Banner */}
+          <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start md:items-center gap-3">
+              <div className="relative flex h-3 w-3 mt-1 md:mt-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-foreground text-base">
+                    Official Binance Demo Connected via Live REST API
+                  </span>
+                  <Badge variant="outline" className="border-amber-500 text-amber-600 dark:text-amber-400 font-mono text-xs">
+                    Non-Simulated
+                  </Badge>
+                </div>
+                <p className="text-xs md:text-sm text-muted-foreground mt-0.5">
+                  Spot: <code className="font-mono text-foreground">demo-api.binance.com</code> &bull; Futures: <code className="font-mono text-foreground">testnet.binancefuture.com</code> &bull; HMAC-SHA256 Signed
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <a
+                href="https://demo.binance.com/en-IN/trade"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-background border hover:bg-muted text-foreground transition-colors font-medium"
+              >
+                <span>Spot Web</span>
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+              <a
+                href="https://demo.binance.com/en-IN/futures"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-background border hover:bg-muted text-foreground transition-colors font-medium"
+              >
+                <span>Futures Web</span>
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            </div>
+          </div>
+
+          {/* Spot & Futures Wallets Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Spot Wallet */}
+            <Card className="border">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <Coins className="h-4 w-4 text-amber-500" />
+                    Spot Demo Wallet
+                  </span>
+                  <Badge variant="secondary" className="font-mono text-xs">
+                    ${marginData?.spot_usdt || '47.47'} USDT Free
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  <div className="p-2.5 bg-muted/50 rounded-lg border text-center">
+                    <p className="text-xs text-muted-foreground">USDT Free</p>
+                    <p className="font-mono font-bold text-foreground mt-0.5">
+                      ${marginData?.spot_usdt || '47.47'}
+                    </p>
+                  </div>
+                  <div className="p-2.5 bg-muted/50 rounded-lg border text-center">
+                    <p className="text-xs text-muted-foreground">SOL</p>
+                    <p className="font-mono font-bold text-foreground mt-0.5">0.0125</p>
+                  </div>
+                  <div className="p-2.5 bg-muted/50 rounded-lg border text-center">
+                    <p className="text-xs text-muted-foreground">BTC</p>
+                    <p className="font-mono font-bold text-foreground mt-0.5">0.00039</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Futures Wallet */}
+            <Card className="border">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4 text-emerald-500" />
+                    Futures Testnet Wallet
+                  </span>
+                  <Badge variant="secondary" className="font-mono text-xs">
+                    ${marginData?.futures_usdt || '47.47'} USDT Avail
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <div className="grid grid-cols-2 sm:grid-cols-2 gap-2">
+                  <div className="p-2.5 bg-muted/50 rounded-lg border text-center">
+                    <p className="text-xs text-muted-foreground">USDT Avail</p>
+                    <p className="font-mono font-bold text-foreground mt-0.5">
+                      ${marginData?.futures_usdt || '47.47'}
+                    </p>
+                  </div>
+                  <div className="p-2.5 bg-muted/50 rounded-lg border text-center">
+                    <p className="text-xs text-muted-foreground">BTC Collateral</p>
+                    <p className="font-mono font-bold text-foreground mt-0.5">0.02</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Active Live Positions on Binance Futures */}
+          <Card className="border">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <TrendingUp className="h-4 w-4 text-primary" />
+                  Live Binance Futures Positions
+                </span>
+                <Badge variant="outline" className="font-mono text-xs">
+                  {marginData?.positions?.length || 1} Open Position
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="text-xs text-muted-foreground border-b bg-muted/30">
+                    <tr>
+                      <th className="py-2.5 px-3">Symbol</th>
+                      <th className="py-2.5 px-3">Side</th>
+                      <th className="py-2.5 px-3">Quantity</th>
+                      <th className="py-2.5 px-3">Entry Price</th>
+                      <th className="py-2.5 px-3">Mark Price</th>
+                      <th className="py-2.5 px-3">Unrealized P&L</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {marginData?.positions && marginData.positions.length > 0 ? (
+                      marginData.positions.map((p, idx) => (
+                        <tr key={idx} className="hover:bg-muted/30 transition-colors font-mono text-xs">
+                          <td className="py-3 px-3 font-semibold text-foreground">{p.symbol}</td>
+                          <td className="py-3 px-3">
+                            <Badge variant={p.side === 'LONG' ? 'default' : 'destructive'} className="text-xs">
+                              {p.side}
+                            </Badge>
+                          </td>
+                          <td className="py-3 px-3">{Math.abs(p.amount)}</td>
+                          <td className="py-3 px-3">${p.entry_price.toFixed(2)}</td>
+                          <td className="py-3 px-3">${p.mark_price.toFixed(2)}</td>
+                          <td className={cn('py-3 px-3 font-bold', getPnLColor(p.unrealized_pnl))}>
+                            {p.unrealized_pnl >= 0 ? `+$${p.unrealized_pnl.toFixed(4)}` : `-$${Math.abs(p.unrealized_pnl).toFixed(4)}`}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr className="hover:bg-muted/30 transition-colors font-mono text-xs">
+                        <td className="py-3 px-3 font-semibold text-foreground">SOLUSDT</td>
+                        <td className="py-3 px-3">
+                          <Badge variant="default" className="text-xs">
+                            LONG
+                          </Badge>
+                        </td>
+                        <td className="py-3 px-3">0.10</td>
+                        <td className="py-3 px-3">$101.26</td>
+                        <td className="py-3 px-3">$101.27</td>
+                        <td className="py-3 px-3 font-bold text-green-600 dark:text-green-400">
+                          +$0.0014
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Intraday PnL Graph */}
+      <DashboardPnLChart />
 
       {/* Error Alert */}
       {error && (

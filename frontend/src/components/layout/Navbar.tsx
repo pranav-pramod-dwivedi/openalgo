@@ -253,6 +253,42 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
 
         {/* Right Side */}
         <div className="ml-auto flex items-center gap-1 sm:gap-2">
+          {/* Global Account Switcher Tabs: INR vs USD */}
+          <div className="flex items-center p-0.5 bg-muted/60 rounded-lg border text-xs shadow-xs">
+            <button
+              type="button"
+              onClick={() => {
+                window.location.href = '/auth/switch-account?account=inr'
+              }}
+              className={cn(
+                'flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all cursor-pointer font-medium text-xs',
+                !(user?.username && user.username.toLowerCase().includes('usd'))
+                  ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+              title="Switch to Indian Markets (INR ₹10,000)"
+            >
+              <span>🇮🇳</span>
+              <span className="hidden sm:inline">INR</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                window.location.href = '/auth/switch-account?account=usd'
+              }}
+              className={cn(
+                'flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all cursor-pointer font-medium text-xs',
+                user?.username && user.username.toLowerCase().includes('usd')
+                  ? 'bg-emerald-600 text-white font-semibold shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+              title="Switch to Forex & Crypto (USD $99.91)"
+            >
+              <span>🌐</span>
+              <span className="hidden sm:inline">USD</span>
+            </button>
+          </div>
+
           {/* Broker Badge — hidden below lg to keep the bar within narrow
               (portrait/small-laptop) widths */}
           {user?.broker && (

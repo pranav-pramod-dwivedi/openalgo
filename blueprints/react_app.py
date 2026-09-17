@@ -216,7 +216,8 @@ def react_scalping():
     return serve_react_app()
 
 
-# Search pages
+# Search & Token pages
+@react_bp.route("/token")
 @react_bp.route("/search/token")
 def react_search_token():
     return serve_react_app()

@@ -44,6 +44,10 @@ def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | No
     if exchange_upper not in VALID_EXCHANGES:
         return False, f"Invalid exchange '{exchange}'. Must be one of: {', '.join(VALID_EXCHANGES)}"
 
+    from services.foreign_data_service import is_foreign_exchange
+    if is_foreign_exchange(exchange_upper):
+        return True, None
+
     # Validate symbol exists in master contract
     token = get_token(symbol, exchange_upper)
     if token is None:
@@ -107,6 +111,52 @@ def get_history_with_auth(
     is_valid, error_msg = validate_symbol_exchange(symbol, exchange)
     if not is_valid:
         return False, {"status": "error", "message": error_msg}, 400
+
+    from services.foreign_data_service import is_foreign_exchange, get_foreign_history
+    if is_foreign_exchange(exchange) and broker != "deltaexchange":
+        try:
+            candles = get_foreign_history(symbol, exchange, interval, start_date, end_date)
+            return True, {"status": "success", "data": candles}, 200
+        except Exception as e:
+            return False, {"status": "error", "message": f"Failed to fetch foreign history for {symbol}: {e}"}, 500
+
+    from database.settings_db import get_analyze_mode
+    if broker == "sandbox" or get_analyze_mode():
+        # First attempt local DuckDB/Historify
+        db_success, db_resp, _ = get_history_from_db(symbol, exchange, interval, start_date, end_date)
+        if db_success and db_resp.get("status") == "success":
+            return True, db_resp, 200
+
+        # Fallback to yfinance for Indian/global equities
+        try:
+            import yfinance as yf
+            ex_up = exchange.upper()
+            ticker_sym = symbol + ".NS" if ex_up == "NSE" else (symbol + ".BO" if ex_up == "BSE" else symbol)
+            yf_interval = interval.lower()
+            if yf_interval in ["d", "1d"]:
+                yf_interval = "1d"
+            elif yf_interval in ["w", "1w"]:
+                yf_interval = "1wk"
+            elif yf_interval in ["m", "1m"]:
+                yf_interval = "1m"
+
+            hist = yf.Ticker(ticker_sym).history(interval=yf_interval, start=start_date, end=end_date)
+            if not hist.empty:
+                candles = []
+                for idx, row in hist.iterrows():
+                    candles.append({
+                        "timestamp": int(idx.timestamp()),
+                        "open": round(float(row["Open"]), 2),
+                        "high": round(float(row["High"]), 2),
+                        "low": round(float(row["Low"]), 2),
+                        "close": round(float(row["Close"]), 2),
+                        "volume": int(row["Volume"]),
+                        "oi": 0,
+                    })
+                if candles:
+                    return True, {"status": "success", "data": candles}, 200
+        except Exception as e:
+            logger.warning(f"Sandbox history fallback error for {symbol}:{exchange}: {e}")
 
     broker_module = import_broker_module(broker)
     if broker_module is None:
@@ -269,6 +319,14 @@ def get_history(
             start_date=start_date,
             end_date=end_date,
         )
+
+    from services.foreign_data_service import is_foreign_exchange, get_foreign_history
+    if is_foreign_exchange(exchange) and broker != "deltaexchange":
+        try:
+            candles = get_foreign_history(symbol, exchange, interval, start_date, end_date)
+            return True, {"status": "success", "data": candles}, 200
+        except Exception as e:
+            return False, {"status": "error", "message": f"Failed to fetch foreign history for {symbol}: {e}"}, 500
 
     # Source: 'api' (default) - Fetch from broker API
     # Enforce 3 requests/second rate limit for broker history calls

@@ -26,6 +26,10 @@ def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | No
     if exchange_upper not in VALID_EXCHANGES:
         return False, f"Invalid exchange '{exchange}'. Must be one of: {', '.join(VALID_EXCHANGES)}"
 
+    from services.foreign_data_service import is_foreign_exchange
+    if is_foreign_exchange(exchange_upper):
+        return True, None
+
     # Validate symbol exists in master contract
     token = get_token(symbol, exchange_upper)
     if token is None:
@@ -118,6 +122,38 @@ def get_quotes_with_auth(
     if not is_valid:
         return False, {"status": "error", "message": error_msg}, 400
 
+    from services.foreign_data_service import is_foreign_exchange, get_foreign_quote
+    if is_foreign_exchange(exchange) and broker != "deltaexchange":
+        try:
+            quotes = get_foreign_quote(symbol, exchange)
+            return True, {"status": "success", "data": quotes}, 200
+        except Exception as e:
+            return False, {"status": "error", "message": f"Failed to fetch foreign quote for {symbol}: {e}"}, 500
+
+    from database.settings_db import get_analyze_mode
+    if broker == "sandbox" or get_analyze_mode():
+        try:
+            import yfinance as yf
+            ex_up = exchange.upper()
+            ticker_sym = symbol + ".NS" if ex_up == "NSE" else (symbol + ".BO" if ex_up == "BSE" else symbol)
+            fi = yf.Ticker(ticker_sym).fast_info
+            ltp = float(getattr(fi, "last_price", 0.0) or 0.0)
+            if ltp > 0:
+                quote_data = {
+                    "open": float(getattr(fi, "open", ltp) or ltp),
+                    "high": float(getattr(fi, "day_high", ltp) or ltp),
+                    "low": float(getattr(fi, "day_low", ltp) or ltp),
+                    "ltp": ltp,
+                    "prev_close": float(getattr(fi, "previous_close", ltp) or ltp),
+                    "volume": int(getattr(fi, "last_volume", 0) or 0),
+                    "bid": ltp,
+                    "ask": ltp,
+                    "oi": 0.0,
+                }
+                return True, {"status": "success", "data": quote_data}, 200
+        except Exception as e:
+            logger.warning(f"Sandbox quote fallback error for {symbol}:{exchange}: {e}")
+
     broker_module = import_broker_module(broker)
     if broker_module is None:
         return False, {"status": "error", "message": "Broker-specific module not found"}, 404
@@ -180,6 +216,14 @@ def get_quotes(
         - Response data (dict)
         - HTTP status code (int)
     """
+    from services.foreign_data_service import is_foreign_exchange, get_foreign_quote
+    if is_foreign_exchange(exchange) and broker != "deltaexchange":
+        try:
+            quotes = get_foreign_quote(symbol, exchange)
+            return True, {"status": "success", "data": quotes}, 200
+        except Exception as e:
+            return False, {"status": "error", "message": f"Failed to fetch foreign quote for {symbol}: {e}"}, 500
+
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
         AUTH_TOKEN, FEED_TOKEN, broker_name = get_auth_token_broker(

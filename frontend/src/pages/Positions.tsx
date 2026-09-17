@@ -136,12 +136,15 @@ const EXCHANGE_COLORS: Record<string, string> = {
   NSE_INDEX: 'bg-cyan-500/20 text-cyan-600 border-cyan-500/30',
   BSE_INDEX: 'bg-slate-500/20 text-slate-600 border-slate-500/30',
   GLOBAL_INDEX: 'bg-indigo-500/20 text-indigo-600 border-indigo-500/30',
+  CRYPTO: 'bg-orange-500/20 text-orange-600 border-orange-500/30',
 }
 
 const PRODUCT_COLORS: Record<string, string> = {
   CNC: 'bg-purple-500/20 text-purple-600 border-purple-500/30',
   MIS: 'bg-cyan-500/20 text-cyan-600 border-cyan-500/30',
   NRML: 'bg-slate-500/20 text-slate-600 border-slate-500/30',
+  SPOT: 'bg-emerald-500/20 text-emerald-600 border-emerald-500/30',
+  FUTURES: 'bg-blue-500/20 text-blue-600 border-blue-500/30',
 }
 
 export default function Positions() {

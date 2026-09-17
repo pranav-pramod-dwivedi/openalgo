@@ -86,7 +86,7 @@ def get_tradebook_with_auth(
     # If original_data is None (internal call), use live broker
     from database.settings_db import get_analyze_mode
 
-    if get_analyze_mode() and original_data:
+    if broker != "binance_demo" and (get_analyze_mode() or broker == "sandbox") and original_data:
         from services.sandbox_service import sandbox_get_tradebook
 
         api_key = original_data.get("apikey")
@@ -102,6 +102,11 @@ def get_tradebook_with_auth(
             )
 
         return sandbox_get_tradebook(api_key, original_data)
+
+    if broker == "binance_demo":
+        from services.binance_demo_service import binance_demo_service
+        trades = binance_demo_service.get_tradebook_formatted()
+        return True, {"status": "success", "data": trades}, 200
 
     broker_funcs = import_broker_module(broker)
     if broker_funcs is None:
@@ -135,7 +140,10 @@ def get_tradebook_with_auth(
 
 
 def get_tradebook(
-    api_key: str | None = None, auth_token: str | None = None, broker: str | None = None
+    api_key: str | None = None,
+    auth_token: str | None = None,
+    broker: str | None = None,
+    original_data: dict[str, Any] | None = None,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Get trade book details.
@@ -145,6 +153,7 @@ def get_tradebook(
         api_key: OpenAlgo API key (for API-based calls)
         auth_token: Direct broker authentication token (for internal calls)
         broker: Direct broker name (for internal calls)
+        original_data: Request payload containing options like currency or account
 
     Returns:
         Tuple containing:
@@ -157,8 +166,10 @@ def get_tradebook(
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
-        original_data = {"apikey": api_key}
-        return get_tradebook_with_auth(AUTH_TOKEN, broker_name, original_data)
+        data = dict(original_data) if original_data else {"apikey": api_key}
+        if "apikey" not in data:
+            data["apikey"] = api_key
+        return get_tradebook_with_auth(AUTH_TOKEN, broker_name, data)
 
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:

@@ -666,10 +666,8 @@ class WebSocketExecutionEngine:
                 return
             broker = get_broker_name(api_key) if api_key else None
             broker_name = broker or "unknown"
-            if broker_name == "unknown":
-                logger.warning(
-                    f"WebSocket subscribe may fail: unknown broker for user {user_id}"
-                )
+            if broker_name in ("sandbox", "unknown"):
+                return
 
             symbol_payload = [{"symbol": s, "exchange": e} for s, e in symbols]
             success, response, status_code = subscribe_to_symbols(
@@ -698,10 +696,8 @@ class WebSocketExecutionEngine:
                 return
             broker = get_broker_name(api_key) if api_key else None
             broker_name = broker or "unknown"
-            if broker_name == "unknown":
-                logger.warning(
-                    f"WebSocket unsubscribe may fail: unknown broker for user {user_id}"
-                )
+            if broker_name in ("sandbox", "unknown"):
+                return
 
             symbol_payload = [{"symbol": s, "exchange": e} for s, e in symbols]
             success, response, status_code = unsubscribe_from_symbols(

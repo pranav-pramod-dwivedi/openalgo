@@ -11,13 +11,13 @@ logger = get_logger(__name__)
 
 
 def is_session_expiry_disabled():
-    """Check if session expiry is disabled (e.g., for crypto brokers with 24/7 markets).
-
-    Note: Each OpenAlgo instance serves a single broker, so this env var is
-    instance-scoped — it only affects the broker configured for this instance,
-    not all brokers globally.  The install script sets it automatically when
-    a crypto broker (e.g. deltaexchange) is selected.
-    """
+    """Check if session expiry is disabled (e.g., for crypto brokers or analyze mode)."""
+    try:
+        from database.settings_db import get_analyze_mode
+        if get_analyze_mode():
+            return True
+    except Exception:
+        pass
     return os.getenv("DISABLE_SESSION_EXPIRY", "false").lower() == "true"
 
 
@@ -60,8 +60,11 @@ def is_session_valid():
         logger.debug("Session invalid: 'logged_in' flag not set")
         return False
 
-    # If no login time is set, consider session invalid
+    # If no login time is set, consider session invalid (or initialize in analyze/crypto mode)
     if "login_time" not in session:
+        if is_session_expiry_disabled():
+            set_session_login_time()
+            return True
         logger.debug("Session invalid: 'login_time' not in session")
         return False
 

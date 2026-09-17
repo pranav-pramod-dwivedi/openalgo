@@ -53,7 +53,12 @@ class FundManager:
 
     def __init__(self, user_id):
         self.user_id = user_id
-        self.starting_capital = Decimal(get_config("starting_capital", "10000000.00"))
+        if "usd" in str(user_id).lower():
+            self.starting_capital = Decimal(get_config("usd_starting_capital", "100.00"))
+            self.currency = "USD"
+        else:
+            self.starting_capital = Decimal(get_config("inr_starting_capital", "10000.00"))
+            self.currency = "INR"
 
     def initialize_funds(self):
         """Initialize funds for a new user"""
@@ -568,6 +573,14 @@ class FundManager:
                     return Decimal(get_config("option_buy_leverage", "1"))
                 else:  # SELL
                     return Decimal(get_config("option_sell_leverage", "1"))
+
+            # Forex exchange (standard retail broker 100x leverage)
+            elif exchange == "FOREX":
+                return Decimal(get_config("forex_leverage", "100"))
+
+            # Crypto exchange (standard 10x leverage)
+            elif exchange == "CRYPTO":
+                return Decimal(get_config("crypto_leverage", "10"))
 
             # Default to 1x leverage
             return Decimal("1")

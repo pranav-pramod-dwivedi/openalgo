@@ -434,17 +434,52 @@ def get_pnl_data():
 
                 # Track position windows
                 if action == "BUY":
-                    position_windows.append(
-                        {
-                            "start_time": trade_time,
-                            "end_time": None,  # Will be filled when position is closed
-                            "qty": qty,
-                            "price": executed_price,
-                            "action": "BUY",
-                            "exit_price": None,  # Will be filled when position is closed
-                        }
-                    )
-                    net_position += qty
+                    if net_position < 0:
+                        # This is closing/covering a short position
+                        remaining_qty = qty
+                        for window in position_windows:
+                            if (
+                                window["action"] == "SELL"
+                                and window["end_time"] is None
+                                and remaining_qty > 0
+                            ):
+                                # Close this short position window
+                                close_qty = min(window["qty"], remaining_qty)
+                                if close_qty == window["qty"]:
+                                    window["end_time"] = trade_time
+                                    window["exit_price"] = executed_price
+                                else:
+                                    window["qty"] -= close_qty
+                                    closed_window = window.copy()
+                                    closed_window["qty"] = close_qty
+                                    closed_window["end_time"] = trade_time
+                                    closed_window["exit_price"] = executed_price
+                                    position_windows.append(closed_window)
+                                remaining_qty -= close_qty
+                        if remaining_qty > 0:
+                            position_windows.append(
+                                {
+                                    "start_time": trade_time,
+                                    "end_time": None,
+                                    "qty": remaining_qty,
+                                    "price": executed_price,
+                                    "action": "BUY",
+                                    "exit_price": None,
+                                }
+                            )
+                        net_position += qty
+                    else:
+                        position_windows.append(
+                            {
+                                "start_time": trade_time,
+                                "end_time": None,  # Will be filled when position is closed
+                                "qty": qty,
+                                "price": executed_price,
+                                "action": "BUY",
+                                "exit_price": None,  # Will be filled when position is closed
+                            }
+                        )
+                        net_position += qty
                 else:  # SELL
                     # Check if this closes a position
                     if net_position > 0:
@@ -460,9 +495,7 @@ def get_pnl_data():
                                 close_qty = min(window["qty"], remaining_qty)
                                 if close_qty == window["qty"]:
                                     window["end_time"] = trade_time
-                                    window["exit_price"] = (
-                                        executed_price  # Store the actual exit price
-                                    )
+                                    window["exit_price"] = executed_price
                                 else:
                                     # Partial close - split the window
                                     window["qty"] -= close_qty
@@ -470,11 +503,20 @@ def get_pnl_data():
                                     closed_window = window.copy()
                                     closed_window["qty"] = close_qty
                                     closed_window["end_time"] = trade_time
-                                    closed_window["exit_price"] = (
-                                        executed_price  # Store the actual exit price
-                                    )
+                                    closed_window["exit_price"] = executed_price
                                     position_windows.append(closed_window)
                                 remaining_qty -= close_qty
+                        if remaining_qty > 0:
+                            position_windows.append(
+                                {
+                                    "start_time": trade_time,
+                                    "end_time": None,
+                                    "qty": remaining_qty,
+                                    "price": executed_price,
+                                    "action": "SELL",
+                                    "exit_price": None,
+                                }
+                            )
                         net_position -= qty
                     else:
                         # This is a short position

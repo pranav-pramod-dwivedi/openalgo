@@ -35,7 +35,7 @@ from utils.email_debug import debug_smtp_connection
 from utils.email_utils import send_password_reset_email, send_test_email
 from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
-from utils.session import check_session_validity, is_session_valid, revoke_user_tokens
+from utils.session import check_session_validity, is_session_valid, revoke_user_tokens, set_session_login_time
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -211,8 +211,26 @@ def _try_resume_broker_session(username):
         feed_token = decrypt_token(auth_obj.feed_token) if auth_obj.feed_token else None
         user_id = auth_obj.user_id
 
-        # Validate token with a lightweight broker API call (funds)
-        import importlib
+        # In analyze mode or sandbox broker, resume session immediately without external broker calls
+        from database.settings_db import get_analyze_mode
+        if get_analyze_mode() or broker == "sandbox":
+            session["logged_in"] = True
+            session["broker"] = "sandbox"
+            session["user"] = username
+            session["user_session_key"] = username
+            set_session_login_time()
+            session.permanent = True
+            from database.auth_db import get_api_key_for_tradingview
+            api_key = get_api_key_for_tradingview(username)
+            return jsonify({
+                "status": "success",
+                "logged_in": True,
+                "user": username,
+                "broker": "sandbox",
+                "api_key": api_key,
+                "mode": "analyze",
+                "redirect": "/dashboard"
+            }), 200
         try:
             broker_module = importlib.import_module(f"broker.{broker}.api.funds")
             if hasattr(broker_module, "test_auth_token"):
@@ -312,8 +330,13 @@ def login():
                 {"status": "success", "message": "Already logged in", "redirect": "/broker"}
             ), 200
 
-        username = request.form["username"]
-        password = request.form["password"]
+        if request.is_json:
+            data = request.get_json() or {}
+            username = data.get("username", "")
+            password = data.get("password", "")
+        else:
+            username = request.form.get("username", "")
+            password = request.form.get("password", "")
 
         ip = get_real_ip()
         ua = request.headers.get("User-Agent", "")
@@ -367,6 +390,28 @@ def login():
                 log_login_attempt(username, ip, ua, status="success",
                                   login_type="resume", broker=session.get("broker"))
                 return resumed
+
+            # If in analyze mode, establish sandbox session directly
+            from database.settings_db import get_analyze_mode
+            if get_analyze_mode():
+                session["logged_in"] = True
+                session["broker"] = "sandbox"
+                session["user"] = username
+                session["user_session_key"] = username
+                set_session_login_time()
+                session.permanent = True
+                from database.auth_db import get_api_key_for_tradingview
+                api_key = get_api_key_for_tradingview(username)
+                log_login_attempt(username, ip, ua, status="success", login_type="password", broker="sandbox")
+                return jsonify({
+                    "status": "success",
+                    "logged_in": True,
+                    "user": username,
+                    "broker": "sandbox",
+                    "api_key": api_key,
+                    "mode": "analyze",
+                    "redirect": "/dashboard"
+                }), 200
 
             # No valid broker session — redirect to broker login
             logger.info("[LOGIN] No valid broker session, redirecting to /broker")
@@ -1024,6 +1069,43 @@ def get_session_status():
     if session.get("logged_in"):
         _touch_session_heartbeat()
 
+    if session.get("broker") == "binance_demo" or session.get("user") == "binance_demo":
+        from database.auth_db import get_api_key_for_tradingview
+        user = session.get("user", "binance_demo")
+        api_key = get_api_key_for_tradingview(user) or "binance_demo_key"
+        return jsonify(
+            {
+                "status": "success",
+                "authenticated": True,
+                "logged_in": True,
+                "user": user,
+                "broker": "binance_demo",
+                "api_key": api_key,
+                "active_sessions": 1,
+                "analyze_mode": False,
+            }
+        ), 200
+
+    # In analyze mode, session is valid with sandbox broker
+    from database.settings_db import get_analyze_mode
+    if get_analyze_mode():
+        from database.auth_db import get_api_key_for_tradingview, get_active_sessions
+        user = session.get("user")
+        api_key = get_api_key_for_tradingview(user) if user else None
+        active_count = len(get_active_sessions(user)) if user else 1
+        return jsonify(
+            {
+                "status": "success",
+                "authenticated": True,
+                "logged_in": True,
+                "user": user,
+                "broker": session.get("broker", "sandbox"),
+                "api_key": api_key,
+                "active_sessions": max(1, active_count),
+                "analyze_mode": True,
+            }
+        ), 200
+
     # If session claims to be logged in with broker, validate the auth token exists
     if session.get("logged_in") and session.get("broker"):
         from database.auth_db import get_api_key_for_tradingview, get_auth_token
@@ -1226,23 +1308,40 @@ def get_dashboard_data():
         ), 401
 
     login_username = session["user"]
-    broker = session.get("broker")
 
+    if session.get("broker") == "binance_demo" or login_username == "binance_demo":
+        from services.binance_demo_service import binance_demo_service
+        margin_data = binance_demo_service.get_margin_data()
+        return jsonify({"status": "success", "data": margin_data})
+
+    from database.settings_db import get_analyze_mode
+    if get_analyze_mode():
+        from database.auth_db import get_api_key_for_tradingview, upsert_api_key
+        from blueprints.apikey import generate_api_key
+        from services.funds_service import get_funds
+
+        api_key = get_api_key_for_tradingview(login_username)
+        if not api_key:
+            api_key = generate_api_key()
+            upsert_api_key(login_username, api_key)
+
+        success, response, status_code = get_funds(api_key=api_key)
+        if success:
+            return jsonify(response), 200
+        else:
+            return jsonify({"status": "error", "message": response.get("message", "Failed to get funds")}), status_code
+
+    broker = session.get("broker")
     if not broker:
         return jsonify({"status": "error", "message": "Broker not set in session"}), 400
 
     try:
         from database.auth_db import get_api_key_for_tradingview, get_auth_token
-        from database.settings_db import get_analyze_mode
         from services.funds_service import get_funds
 
         AUTH_TOKEN = get_auth_token(login_username)
 
         if AUTH_TOKEN is None:
-            # The APP session is still valid -- it is the BROKER token that is
-            # revoked/expired. The machine-readable code lets the dashboard
-            # point the user at /broker (reconnect) instead of /login, which
-            # would just bounce them back (issue #1400).
             logger.warning(f"No auth token found for user {login_username}")
             return jsonify(
                 {
@@ -1252,17 +1351,7 @@ def get_dashboard_data():
                 }
             ), 401
 
-        # Check if in analyze mode
-        if get_analyze_mode():
-            api_key = get_api_key_for_tradingview(login_username)
-            if api_key:
-                success, response, status_code = get_funds(api_key=api_key)
-            else:
-                return jsonify(
-                    {"status": "error", "message": "API key required for analyze mode"}
-                ), 400
-        else:
-            success, response, status_code = get_funds(auth_token=AUTH_TOKEN, broker=broker)
+        success, response, status_code = get_funds(auth_token=AUTH_TOKEN, broker=broker)
 
         if not success:
             logger.error(f"Failed to get funds data: {response.get('message', 'Unknown error')}")
@@ -1281,6 +1370,34 @@ def get_dashboard_data():
     except Exception as e:
         logger.exception(f"Error fetching dashboard data: {e}")
         return jsonify({"status": "error", "message": "Internal server error"}), 500
+
+
+@auth_bp.route("/switch-account", methods=["GET"])
+def switch_account():
+    """Switch active dashboard between INR (openalgo_admin), USD (openalgo_usd), and Binance Demo (binance_demo)."""
+    target = (request.args.get("account") or "").strip().lower()
+    from utils.session import set_session_login_time
+
+    if target in ("binance", "binance_demo"):
+        session["user"] = "binance_demo"
+        session["broker"] = "binance_demo"
+        session["logged_in"] = True
+        session["mode"] = "live"
+    elif target in ("usd", "forex", "crypto"):
+        session["user"] = "openalgo_usd"
+        session["broker"] = "sandbox"
+        session["logged_in"] = True
+        session["mode"] = "analyze"
+    else:
+        session["user"] = "openalgo_admin"
+        session["broker"] = "sandbox"
+        session["logged_in"] = True
+        session["mode"] = "analyze"
+
+    session.permanent = True
+    set_session_login_time()
+
+    return redirect("/dashboard")
 
 
 def _is_foreign_initiated() -> bool:
