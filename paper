@@ -78,10 +78,10 @@ cmd_trade() {
   local symbol=""
   if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then symbol="$1"; shift; fi
   local extra=()
-  [ -n "$symbol" ] && extra+=(--symbol "$symbol")
+  if [ -n "$symbol" ]; then extra=(--symbol "$symbol"); fi
   say "Asking the planner for one trade on ${symbol:-the watchlist} (paper money)"
   set +e
-  uv run python scripts/profitable_trade.py "${extra[@]}" "$@" --yes
+  uv run python scripts/profitable_trade.py ${extra[@]+"${extra[@]}"} "$@" --yes
   local rc=$?
   set -e
   say "Dashboard: /paper   Worker log: $WORKER_LOG"
