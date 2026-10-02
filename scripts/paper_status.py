@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from services.paper import db, jev  # noqa: E402
 from services.paper.config import load  # noqa: E402
+from services.paper.worker import analyst_outage_state  # noqa: E402
 
 
 def _ago(ts) -> str:
@@ -24,6 +25,14 @@ def _ago(ts) -> str:
     if secs < 5400:
         return f"{secs // 60} minutes ago"
     return f"{secs // 3600} hours ago"
+
+
+def _when(ts) -> str:
+    """A plain timestamp, or a sentence saying there is not one yet."""
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(ts)))
+    except (TypeError, ValueError):
+        return "an unknown time"
 
 
 def _plain(payload: str) -> str:
@@ -112,14 +121,40 @@ def main() -> int:
         return default if val in (None, "") else val
 
     fault = jev.failure_reason()
+    # Read through the worker's own reader, so this screen and the worker's
+    # ``--status`` cannot disagree about whether trading has fallen back.
+    outage = analyst_outage_state()
+    stopped = "STOPPED (you asked it to stop)" if halted else "ON, working on its own"
     print("\n  PAPER TRADING - VIRTUAL MONEY (no real money involved)")
-    if fault:
+    if outage["active"] and not halted:
+        print("  AI reviewer        : not answering - it is being asked every cycle")
+        print(
+            f"  Trading            : ON, but unreviewed since "
+            f"{_when(outage['started_at'])} ({_ago(outage['started_at'])})"
+        )
+        print(
+            f"  No-review trades   : {outage['unreviewed_trades']} placed with no AI "
+            "reviewing them"
+        )
+        print(
+            "  What happens next  : the next cycle asks the reviewer again, and reviewed "
+            "trading"
+        )
+        print(
+            "                       resumes on its own as soon as it answers. Nothing to restart."
+        )
+    elif halted:
+        print(f"  AI reviewer        : {'not answering' if fault else 'ready'}")
+        print(f"  Trading            : {stopped}")
+    elif fault:
         print(f"  AI reviewer        : unavailable - {fault}")
+        print(f"  Trading            : {stopped}")
     elif jev._key():
         print("  AI reviewer        : ready - it reviews each trade when it can be reached")
+        print(f"  Trading            : {stopped}")
     else:
         print("  AI reviewer        : not set up, so nothing reviews the trades")
-    print(f"  Trading            : {'STOPPED' if halted else 'ON, working on its own'}")
+        print(f"  Trading            : {stopped}")
     print("  One trade each time: every ./paper places one trade, then stops")
     print(f"  Last trade placed  : {_last_trade(last_trade)}")
     print(f"  Watching           : {', '.join(s.replace('USDT', '') for s in watchlist)}")

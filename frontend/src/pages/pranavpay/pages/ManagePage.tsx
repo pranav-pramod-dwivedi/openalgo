@@ -1,30 +1,45 @@
-import { EmptyNote, LoadingNote, StaleNote, useSnapshot } from '../components'
+import {
+  ACCOUNT_LABEL,
+  NOT_REPORTED,
+  type PaperAccount,
+  SANDBOX_LABEL,
+  VIRGIN_DETAIL,
+  VIRGIN_TITLE,
+} from '../account'
+import {
+  EmptyNote,
+  LoadingNote,
+  SandboxPanel,
+  StaleNote,
+  TwoAccountsNote,
+  useSnapshot,
+} from '../components'
 import { money, percent, qty, signedMoney } from '../derive'
-import { toAmounts } from '../useWalletSnapshot'
 
 /**
  * Manage.
  *
- * The prototype showed a risk profile with editable loss guards, volatility
- * filters, approval thresholds and a "patient momentum" strategy. None of those
- * existed behind the buttons, so a trader could have read a guardrail that was
- * never enforced. This page lists only what is genuinely enforced in the order
- * path, and states plainly what is not implemented yet.
+ * Two accounts, two sections, and no card that touches both.
+ *
+ * The virtual account's limits are the paper engine's, and `/api/paper/state`
+ * does not report the configuration behind them: the caps it enforces live in
+ * the ledger's settings, not in its state payload. So this page does not print
+ * the numbers it cannot read. Each limit reads "not reported" until something
+ * reports it, which is a truthful row rather than a wrong one.
+ *
+ * The order-path limits below it belong to the Binance sandbox and say so.
  */
 export default function ManagePage() {
   const snapshot = useSnapshot()
-  const amounts = toAmounts(snapshot.funds)
+  const account = snapshot.account.figures
 
-  if (snapshot.loading && !snapshot.funds) {
+  if (snapshot.account.loading && !account) {
     return (
       <div className="content-wrap page-view is-visible">
-        <LoadingNote label="Reading your guardrails" />
+        <LoadingNote label="Reading your virtual account" />
       </div>
     )
   }
-
-  const equity = amounts?.equity ?? 0
-  const maxOrder = amounts?.tradable ?? 0
 
   return (
     <div className="content-wrap page-view is-visible" data-page="Manage">
@@ -39,50 +54,56 @@ export default function ManagePage() {
             <span className="period">actually hold.</span>
           </h1>
           <p className="intro-copy">
-            Each limit below is checked on the order path before anything is sent to the exchange.
+            Each limit below is checked before the paper worker places a virtual order. Where the
+            engine does not report its configuration, this page says so rather than showing a number
+            it did not read.
           </p>
         </div>
       </section>
 
-      {snapshot.stale && <StaleNote />}
+      <TwoAccountsNote />
+
+      {snapshot.account.stale && <StaleNote />}
 
       <section className="manage-grid">
         <article className="manage-hero ai-card">
           <div className="ai-card-header">
             <div>
-              <span className="card-label inverse-label">Hard limit</span>
-              <h2>Savings floor</h2>
+              <span className="card-label inverse-label">{ACCOUNT_LABEL}</span>
+              <h2>Your virtual account</h2>
             </div>
             <span className="live-label">
-              <span className="live-dot" /> Enforced
+              <span className="live-dot" /> Read from the ledger
             </span>
           </div>
           <div className="manage-status-line">
             <div className="manage-status-number">
-              {amounts ? money(amounts.floor).replace('$', '') : '—'}
+              {account?.equity === null || account?.equity === undefined
+                ? '—'
+                : money(account.equity).replace('$', '')}
             </div>
             <div>
-              <strong>dollars are untouchable</strong>
-              <small>The first part of your balance no order can spend</small>
+              <strong>dollars of virtual equity</strong>
+              <small>Cash plus open P&amp;L, less margin held against shorts</small>
             </div>
           </div>
           <div className="manage-rule-list">
             <div>
-              <span>Protected savings</span>
-              <strong>{amounts ? money(amounts.savings) : '—'}</strong>
+              <span>Virtual cash</span>
+              <strong>{read(account?.cash ?? null, money)}</strong>
             </div>
             <div>
-              <span>Free to trade</span>
-              <strong>{amounts ? money(amounts.tradable) : '—'}</strong>
+              <span>Margin held against shorts</span>
+              <strong>{read(account?.shortMarginLocked ?? null, money)}</strong>
             </div>
             <div>
-              <span>Equity in total</span>
-              <strong>{equity > 0 ? money(equity) : '—'}</strong>
+              <span>Open positions</span>
+              <strong>{account?.positions.length ?? 0}</strong>
             </div>
           </div>
           <div className="pp-note pp-note-inverse">
-            The floor is set on the server. It cannot be lowered from this page, and it survives
-            restarts.
+            The paper engine's own configuration is not part of the state it publishes, so no limit
+            is quoted here. The ledger holds it.
           </div>
         </article>
 
@@ -90,36 +111,40 @@ export default function ManagePage() {
           <div className="section-heading compact-heading">
             <div>
               <span className="card-label">Spending cap</span>
-              <h2>How much one order may cost</h2>
+              <h2>How much one virtual order may cost</h2>
             </div>
           </div>
-          {maxOrder <= 0 ? (
-            <EmptyNote
-              title="Nothing is free to trade"
-              detail="The whole balance is at or below the savings floor, so no new order can be placed."
-            />
+          {account?.virgin ? (
+            <EmptyNote title={VIRGIN_TITLE} detail={VIRGIN_DETAIL} />
           ) : (
             <div className="settings-list">
               <div>
                 <span>
-                  <strong>Largest new order right now</strong>
-                  <small>Checked against tradable balance before sending</small>
+                  <strong>Per-order cap</strong>
+                  <small>Enforced by the engine, value not published in its state</small>
                 </span>
-                <b>{money(maxOrder)}</b>
+                <b>{NOT_REPORTED}</b>
               </div>
               <div>
                 <span>
-                  <strong>Share of equity</strong>
-                  <small>What that cap represents of your balance</small>
+                  <strong>Total exposure cap</strong>
+                  <small>Enforced by the engine, value not published in its state</small>
                 </span>
-                <b>{equity > 0 ? percent((maxOrder / equity) * 100) : '—'}</b>
+                <b>{NOT_REPORTED}</b>
               </div>
               <div>
                 <span>
-                  <strong>Margin already committed</strong>
-                  <small>Locked by open positions, deducted from the cap</small>
+                  <strong>Daily loss cap</strong>
+                  <small>Enforced by the engine, value not published in its state</small>
                 </span>
-                <b>{amounts ? money(amounts.marginLocked) : '—'}</b>
+                <b>{NOT_REPORTED}</b>
+              </div>
+              <div>
+                <span>
+                  <strong>Largest position size</strong>
+                  <small>Enforced by the engine, value not published in its state</small>
+                </span>
+                <b>{NOT_REPORTED}</b>
               </div>
             </div>
           )}
@@ -132,27 +157,7 @@ export default function ManagePage() {
               <h2>What is at risk</h2>
             </div>
           </div>
-          {snapshot.positions.length === 0 ? (
-            <EmptyNote
-              title="No exposure"
-              detail="Nothing is open, so no capital can move against you right now."
-            />
-          ) : (
-            <div className="settings-list">
-              {snapshot.positions.map((position) => (
-                <div key={position.symbol}>
-                  <span>
-                    <strong>{position.symbol}</strong>
-                    <small>
-                      {qty(Math.abs(position.quantity))} ·{' '}
-                      {position.quantity < 0 ? 'Short' : 'Long'}
-                    </small>
-                  </span>
-                  <b>{signedMoney(position.pnl)}</b>
-                </div>
-              ))}
-            </div>
-          )}
+          <VirtualExposure account={account} />
         </article>
       </section>
 
@@ -178,39 +183,81 @@ export default function ManagePage() {
             <div>
               <span>
                 <strong>Deposits and withdrawals</strong>
-                <small>Move funds on the exchange itself</small>
+                <small>
+                  The virtual account has no exchange behind it, so there is nowhere to move it
+                </small>
               </span>
               <b>Not available</b>
             </div>
           </div>
         </article>
+      </section>
 
-        <article className="surface-card preference-card">
-          <span className="card-label">Venue</span>
-          <h2>Where orders go</h2>
-          <p>
-            {snapshot.funds?.is_live
-              ? 'This account is trading the real Binance exchange. Real funds are at risk.'
-              : 'This account is trading Binance testnet. The balances are practice funds.'}
-          </p>
-          <div className="settings-list">
-            <div>
-              <span>
-                <strong>Mode</strong>
-                <small>Testnet and live differ in what the money is worth</small>
-              </span>
-              <b>{snapshot.funds?.is_live ? 'Live' : 'Testnet'}</b>
-            </div>
-            <div>
-              <span>
-                <strong>Blocked above the cap</strong>
-                <small>New exposure only; closing a position is always allowed</small>
-              </span>
-              <b>Yes</b>
-            </div>
+      {/* The sandbox is a different account, so it is a different section, and
+          it comes last: the virtual account is what this page is about. */}
+      <section className="pp-sandbox-section">
+        <div className="section-heading compact-heading">
+          <div>
+            <span className="card-label">A different account</span>
+            <h2>{SANDBOX_LABEL}</h2>
           </div>
-        </article>
+        </div>
+        <SandboxPanel snapshot={snapshot} />
+      </section>
+
+      <section className="pp-note pp-note-quiet">
+        The limits on this page apply to the virtual account only. The Binance sandbox enforces its
+        own order path rules, and that is the one behind anything you see in the OpenAlgo terminal.
       </section>
     </div>
   )
+}
+
+/** Every open virtual position with its marked result, or the honest gap. */
+function VirtualExposure({ account }: { account: PaperAccount | null }) {
+  if (!account) return <LoadingNote />
+  if (account.positions.length === 0) {
+    return (
+      <EmptyNote
+        title="No virtual exposure"
+        detail="Nothing is open, so no virtual capital can move against you right now."
+      />
+    )
+  }
+  return (
+    <div className="settings-list">
+      {account.positions.map((position) => (
+        <div key={position.symbol}>
+          <span>
+            <strong>{position.symbol}</strong>
+            <small>
+              {qty(position.qty)} ·{' '}
+              {String(position.side).toUpperCase() === 'SELL' ? 'Short' : 'Long'}
+              {position.mark_live === false ? ' · mark is the last known price' : ''}
+            </small>
+          </span>
+          <b>{signedMoney(position.unrealized)}</b>
+        </div>
+      ))}
+      <div>
+        <span>
+          <strong>Open position value</strong>
+          <small>Sum of the marks the ledger reports</small>
+        </span>
+        <b>{read(account.openPositionValue, money)}</b>
+      </div>
+      <div>
+        <span>
+          <strong>Share of equity</strong>
+          <small>What that value represents of the account</small>
+        </span>
+        <b>{read(account.exposureShare, percent)}</b>
+      </div>
+    </div>
+  )
+}
+
+/** The ledger figure, or the words for its absence. Never a zero. */
+function read(value: number | null, format: (n: number) => string): string {
+  return value === null ? NOT_REPORTED : format(value)
 }

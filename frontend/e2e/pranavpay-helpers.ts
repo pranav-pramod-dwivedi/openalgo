@@ -4,22 +4,29 @@ import type { Page } from '@playwright/test'
  * Shared fixtures for the PranavPay surface.
  *
  * Production serves the PranavPay bundle at `/`, `/wallet`, `/transactions`,
- * `/manage` and `/account`. Under the repo's normal e2e command (`npm run dev`)
- * Vite serves the OpenAlgo app at those paths instead, so document requests for
- * them are fulfilled here with the dev server's own `pranavpay.html` shell.
- * Every other request (module scripts, assets) passes through untouched.
+ * `/manage`, `/account` and `/paper`. Under the repo's normal e2e command
+ * (`npm run dev`) Vite serves the OpenAlgo app at those paths instead, so
+ * document requests for them are fulfilled here with the dev server's own
+ * `pranavpay.html` shell. Every other request (module scripts, assets) passes
+ * through untouched.
  *
- * All data requests are mocked: the specs never touch a live server or Binance.
+ * Two accounts are mocked and they are deliberately on different scales, so a
+ * spec that renders one of them as the other fails loudly:
+ *
+ *   - `/api/paper/state` is the virtual account, roughly $1000.
+ *   - `/auth/dashboard-data` is the Binance testnet sandbox, roughly $30,000.
+ *
+ * No spec may assert that a sandbox figure appears on an account card.
  */
 
-const SHELL_PATHS = new Set(['/', '/wallet', '/transactions', '/manage', '/account'])
+const SHELL_PATHS = new Set(['/', '/wallet', '/transactions', '/manage', '/account', '/paper'])
 
 function isPranavPayShellRequest(url: URL): boolean {
   const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
   return local && SHELL_PATHS.has(url.pathname)
 }
 
-/** Serve the PranavPay shell for its five routes while running under `vite dev`. */
+/** Serve the PranavPay shell for its routes while running under `vite dev`. */
 export async function servePranavPayShell(page: Page): Promise<void> {
   await page.route(isPranavPayShellRequest, async (route) => {
     const requestUrl = new URL(route.request().url())
@@ -33,101 +40,150 @@ export async function servePranavPayShell(page: Page): Promise<void> {
 }
 
 export interface PranavPayScenario {
-  funds: Record<string, unknown>
-  positions: Array<Record<string, unknown>>
-  trades: Array<Record<string, unknown>>
-  orders: Array<Record<string, unknown>>
+  /** The paper ledger: the user's virtual account. */
+  paper: Record<string, unknown>
+  /** The Binance testnet funds: a sandbox, never the account. */
+  sandbox: Record<string, unknown>
 }
 
-const FUNDED_FUNDS: Record<string, unknown> = {
+/** A virtual account that has traded: ~$999.89 equity, one open position. */
+const FUNDED_PAPER: Record<string, unknown> = {
+  starting_cash: 1000,
+  cash: 999.4748,
+  virtual_balance: 999.4748,
+  short_margin_locked: 0,
+  equity: 999.8877,
+  realized: 0.2757,
+  unrealized: 0.4135,
+  fees: 0.4004,
+  peak_equity: 999.8877,
+  drawdown: 0,
+  positions: [
+    {
+      symbol: 'BTCUSDT',
+      side: 'BUY',
+      qty: 0.0059,
+      entry: 84450,
+      mark: 84468.89,
+      mark_live: true,
+      unrealized: 0.4135,
+      strategy_id: 'momentum-v2',
+      opened: 1790974294,
+    },
+  ],
+  fills: [
+    {
+      order_id: 'plan-1',
+      symbol: 'BTCUSDT',
+      side: 'SELL',
+      qty: 0.0059,
+      price: 84468.89,
+      fee: 0.1999,
+      slippage: 16.89,
+      ts: 1790974294.01115,
+    },
+    {
+      order_id: 'close-1',
+      symbol: 'BTCUSDT',
+      side: 'BUY',
+      qty: 0.0059,
+      price: 84450,
+      fee: 0.1999,
+      slippage: 16.89,
+      ts: 1790973353.96429,
+    },
+  ],
+  equity_curve: [
+    {
+      ts: 1790973353,
+      cash: 999.4,
+      equity: 999.7,
+      realized: 0.27,
+      unrealized: 0.3,
+      fees: 0.4,
+      slippage: 16.8,
+      drawdown: 0,
+    },
+    {
+      ts: 1790974294,
+      cash: 999.4748,
+      equity: 999.8877,
+      realized: 0.2757,
+      unrealized: 0.4135,
+      fees: 0.4004,
+      slippage: 16.89,
+      drawdown: 0,
+    },
+  ],
+  strategies: [
+    {
+      id: 'momentum-v2',
+      family: 'momentum',
+      params: '{}',
+      metrics: JSON.stringify({ trades: 42, net_pnl: 31.2, max_drawdown: 8.4 }),
+      status: 'active',
+      created: 1790960000,
+      version: 2,
+    },
+  ],
+  experiment_count: 105,
+  worker: { ts: 1790974611.4, status: 'running', error: null, cycle: 48 },
+  decisions: [],
+  jev_verdicts: 12,
+  generated_at: 1790974611.5,
+}
+
+/** A ledger the worker has never written to: no fills, no positions, no curve. */
+const EMPTY_PAPER: Record<string, unknown> = {
+  starting_cash: 1000,
+  cash: 0,
+  virtual_balance: 0,
+  short_margin_locked: 0,
+  equity: 0,
+  realized: 0,
+  unrealized: 0,
+  fees: 0,
+  peak_equity: 0,
+  drawdown: 0,
+  positions: [],
+  fills: [],
+  equity_curve: [],
+  strategies: [],
+  experiment_count: 0,
+  worker: null,
+  decisions: [],
+  jev_verdicts: 0,
+  generated_at: 1790974611.5,
+}
+
+/** Binance testnet: ~$30,000 of practice funds, on a different scale entirely. */
+const SANDBOX_FUNDS: Record<string, unknown> = {
   wallet_total_usd: '30000',
-  equity_usd: '30000',
+  equity_usd: '29999.12',
   trading_floor: '20000',
   savings_usdt: '20000',
-  tradable_usdt: '10000',
+  tradable_usdt: '99.99',
   open_notional_usd: '5000',
-  availablecash: '10000',
+  availablecash: '99.99',
   m2munrealized: '250.00',
   m2mrealized: '120.50',
   utiliseddebits: '5000',
   spot_usdt: '20000',
-  futures_usdt: '10000',
+  futures_usdt: '9999.99',
   is_live: false,
   positions: [],
   spot_balances: [{ asset: 'USDT', free: 20000, locked: 0, total: 20000 }],
-  futures_balances: [{ asset: 'USDT', balance: 10000, available: 5000 }],
-}
-
-const FUNDED_POSITIONS: Array<Record<string, unknown>> = [
-  {
-    symbol: 'BTCUSDT',
-    exchange: 'CRYPTO',
-    product: 'FUTURES',
-    quantity: 0.1,
-    average_price: 50000,
-    ltp: 52000,
-    pnl: 200,
-    pnlpercent: 4.0,
-  },
-]
-
-const FUNDED_TRADES: Array<Record<string, unknown>> = [
-  {
-    symbol: 'BTCUSDT',
-    exchange: 'CRYPTO',
-    action: 'BUY',
-    quantity: 0.1,
-    average_price: 50000,
-    trade_value: 5000,
-    product: 'FUTURES',
-    orderid: 'ord-1',
-    timestamp: '2026-09-18 03:53:31',
-  },
-  {
-    symbol: 'ETHUSDT',
-    exchange: 'CRYPTO',
-    action: 'SELL',
-    quantity: 1,
-    average_price: 3000,
-    trade_value: 3000,
-    pnl: 150,
-    product: 'FUTURES',
-    orderid: 'ord-2',
-    timestamp: '2026-09-19 10:00:00',
-  },
-]
-
-const EMPTY_FUNDS: Record<string, unknown> = {
-  wallet_total_usd: '0',
-  equity_usd: '0',
-  trading_floor: '0',
-  savings_usdt: '0',
-  tradable_usdt: '0',
-  open_notional_usd: '0',
-  availablecash: '0',
-  m2munrealized: '0',
-  m2mrealized: '0',
-  utiliseddebits: '0',
-  spot_usdt: '0',
-  futures_usdt: '0',
-  is_live: false,
-  positions: [],
-  spot_balances: [],
-  futures_balances: [],
+  futures_balances: [{ asset: 'USDT', balance: 9999.99, available: 99.99 }],
 }
 
 export const fundedScenario: PranavPayScenario = {
-  funds: FUNDED_FUNDS,
-  positions: FUNDED_POSITIONS,
-  trades: FUNDED_TRADES,
-  orders: [],
+  paper: FUNDED_PAPER,
+  sandbox: SANDBOX_FUNDS,
 }
 
 export const emptyScenario: PranavPayScenario = {
-  funds: EMPTY_FUNDS,
-  positions: [],
-  trades: [],
-  orders: [],
+  paper: EMPTY_PAPER,
+  sandbox: SANDBOX_FUNDS,
 }
 
 function json(body: unknown): { status: number; contentType: string; body: string } {
@@ -135,8 +191,8 @@ function json(body: unknown): { status: number; contentType: string; body: strin
 }
 
 /**
- * Mock every network call the surface makes: session sync, dashboard funds,
- * the trading books, live-mark polls, candle history and the streaming stack.
+ * Mock every network call the surface makes: session sync, the paper ledger,
+ * the sandbox funds, live-mark polls, candle history and the streaming stack.
  * The WebSocket config answers with an error so no socket is ever dialled.
  */
 export async function mockPranavPayNetwork(page: Page, scenario: PranavPayScenario): Promise<void> {
@@ -152,8 +208,13 @@ export async function mockPranavPayNetwork(page: Page, scenario: PranavPayScenar
       })
     )
   )
+  // The account. Everything the surface calls an account figure comes from here.
+  await page.route('**/api/paper/state', (route) =>
+    route.fulfill(json({ status: 'success', data: scenario.paper }))
+  )
+  // The sandbox. Kept on a visibly different scale so a mixed card is obvious.
   await page.route('**/auth/dashboard-data', (route) =>
-    route.fulfill(json({ status: 'success', data: scenario.funds }))
+    route.fulfill(json({ status: 'success', data: scenario.sandbox }))
   )
   await page.route('**/auth/analyzer-mode', (route) =>
     route.fulfill(json({ status: 'success', data: { analyze_mode: false } }))
@@ -175,17 +236,17 @@ export async function mockPranavPayNetwork(page: Page, scenario: PranavPayScenar
     )
   )
   await page.route('**/api/v1/positionbook', (route) =>
-    route.fulfill(json({ status: 'success', data: scenario.positions }))
+    route.fulfill(json({ status: 'success', data: [] }))
   )
   await page.route('**/api/v1/tradebook', (route) =>
-    route.fulfill(json({ status: 'success', data: scenario.trades }))
+    route.fulfill(json({ status: 'success', data: [] }))
   )
   await page.route('**/api/v1/orderbook', (route) =>
     route.fulfill(
       json({
         status: 'success',
         data: {
-          orders: scenario.orders,
+          orders: [],
           statistics: {
             total_buy_orders: 0,
             total_sell_orders: 0,

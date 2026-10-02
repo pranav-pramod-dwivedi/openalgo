@@ -16,13 +16,46 @@ Autonomous trading no longer reads raw strategy signals. Every cycle asks
 
 * the planner is imported lazily, inside the cycle, so a missing or half-written
   planner module cannot stop the worker from starting or from reporting;
-* ``execute`` runs only when the plan carries no ``refusal_reason`` **and** the
-  planner reports ``analyst_available``. A plan made without the analyst is
-  rules-only and is refused: no blind, rules-only trades;
-* a refused cycle writes one ``worker_skipped`` decision carrying the reason and
-  places no order;
-* the planner is called at most once per cycle and a refusal is never retried, so
-  one tick can never produce two jobs.
+* the planner is called at most once per cycle, so one tick can never produce
+  two jobs;
+* a plan carrying no ``refusal_reason`` but no analyst opinion is refused while
+  the analyst is healthy: no blind, rules-only trades.
+
+Analyst outage
+--------------
+A free-tier analyst that answers nothing is not a reason for an account to stand
+still for hours, and refusing forever is indistinguishable, to a user, from a
+worker that is stuck. So the worker counts the cycles in which the analyst did
+not answer:
+
+* the analyst is asked **first on every cycle**, outage or not, so reviewed
+  trading resumes on the very next cycle in which the quota has reset -- no
+  restart, no manual step, no operator watching for a switch;
+* once the analyst has failed ``analyst_outage_cycles`` cycles running (config,
+  default 3) the worker stops refusing and asks for that cycle's plan with
+  ``allow_rules_only=True``. The plan is still risk-checked, still sized and
+  still bracketed exactly as a reviewed one; only the model opinion is missing;
+* every trade placed that way is stamped unreviewed on the plan itself
+  (``analyst_bypassed``) and again in a ``unreviewed_trade`` decision, so no
+  record anywhere can be read as a reviewed trade;
+* the switch is journalled **once**: ``analyst_outage_started`` when unreviewed
+  trading begins, ``analyst_outage_ended`` when the analyst answers again. One
+  row each, however many cycles the outage lasts -- a row per cycle would make
+  the outage itself the noise;
+* neither switch relaxes anything else. One trade per cycle still holds, and
+  halted still means no orders at all, unreviewed trading included.
+
+Journal hygiene
+---------------
+A refusal that repeats every minute is not information, and a journal nobody can
+read is not a decision log. An identical refusal -- same reason, as the
+planner's own vocabulary defines it -- is journalled at most once an hour
+(:data:`REFUSAL_LOG_INTERVAL_SECONDS`). The throttle state is the journal itself:
+a refusal is written only after asking the ``decisions`` table whether this same
+reason was already recorded inside the window, on the same connection the row is
+then inserted on. Nothing is cached in the worker, so a second process running
+the same database honours the same throttle instead of holding a private count
+that drifts from what is written.
 
 One trade per cycle
 -------------------
@@ -66,6 +99,8 @@ second *process* running the worker at the same time.
 
 from __future__ import annotations
 
+import json
+import sqlite3
 import threading
 import time
 
@@ -97,6 +132,27 @@ TOO_MANY_TRADES = "too_many_trades_in_cycle"
 PLANNER_UNAVAILABLE = "planner_unavailable"
 PLANNER_ANALYST_UNAVAILABLE = "analyst_unavailable"
 PLANNER_ERROR = "planner_error"
+
+# Journal kinds. KIND_SKIPPED is a refused cycle, which is the thing that
+# repeats. The two outage kinds mark a state change and are written once each,
+# never per cycle, so the outage is legible as two rows rather than as noise.
+KIND_SKIPPED = "worker_skipped"
+KIND_OUTAGE_STARTED = "analyst_outage_started"
+KIND_OUTAGE_ENDED = "analyst_outage_ended"
+KIND_UNREVIEWED_TRADE = "unreviewed_trade"
+
+# How often one identical refusal may be journalled, in seconds. One hour is the
+# journal's resolution: after it the reason is worth writing again, because
+# something may have changed in between.
+REFUSAL_LOG_INTERVAL_SECONDS = 3600
+
+# The plain-language note stamped on an unreviewed trade. It is the same sentence
+# the operator reads in status, kept in one place so the journal and the screen
+# cannot drift apart.
+UNREVIEWED_NOTE = (
+    "the AI analyst was not answering, so this trade was placed on rules alone "
+    "and nothing reviewed it"
+)
 
 # The journal kind a halted cycle writes, kept in step with
 # ``planner.KIND_EXIT_HALTED``. Spelled here so a halted cycle can be recorded
@@ -140,6 +196,128 @@ def _load_planner():
         return None
 
 
+# ------------------------------------------------------------ refusal throttle
+
+
+def _last_refusal_ts(conn, reason: str) -> float | None:
+    """When this exact reason was last journalled on ``conn``, if ever.
+
+    Read through SQLite's JSON reader so the filter happens in the database
+    rather than by pulling the table into Python. A build without that function
+    falls back to a bounded scan instead of losing the throttle entirely.
+    """
+    try:
+        row = conn.execute(
+            "SELECT ts FROM decisions WHERE kind=? "
+            "AND json_extract(payload, '$.refusal_reason')=? ORDER BY id DESC LIMIT 1",
+            (KIND_SKIPPED, reason),
+        ).fetchone()
+    except sqlite3.Error:
+        return _last_refusal_ts_scan(conn, reason)
+    return float(row["ts"]) if row is not None else None
+
+
+def _last_refusal_ts_scan(conn, reason: str) -> float | None:
+    """The same lookup without ``json_extract``, over the most recent rows."""
+    rows = conn.execute(
+        "SELECT ts, payload FROM decisions WHERE kind=? ORDER BY id DESC LIMIT 500",
+        (KIND_SKIPPED,),
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload"])
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict) and str(payload.get("refusal_reason", "")) == reason:
+            return float(row["ts"])
+    return None
+
+
+def _journal_skip(reason: str, payload: dict) -> bool:
+    """Write one refused-cycle row, unless this reason was written recently.
+
+    Returns True when a row was appended, False when the hour had not passed and
+    the refusal was already on record.
+
+    The throttle is the journal. Whether a reason is due is answered by reading
+    ``decisions`` -- the table every process writes -- on the same connection the
+    row is then inserted on, rather than from a counter this process keeps in
+    memory. That is what makes it hold across processes: a second worker, or the
+    ``--status`` shell, cannot disagree with what was written, and restarting
+    cannot replay an hour of refusals that were never logged.
+
+    The write lock is taken before the lookup so the check and the insert cannot
+    interleave with another process doing the same. If SQLite refuses to start
+    that transaction the row is still written, throttled or not: losing one
+    duplicate row is preferable to losing the record of a refusal.
+    """
+    row = dict(payload)
+    row["refusal_reason"] = reason
+    try:
+        with db.conn() as c:
+            try:
+                c.execute("BEGIN IMMEDIATE")
+            except sqlite3.Error:
+                pass  # already inside a transaction, or this build objects
+            last = _last_refusal_ts(c, reason)
+            if last is not None and time.time() - last < REFUSAL_LOG_INTERVAL_SECONDS:
+                return False
+            db.log(KIND_SKIPPED, row, existing=c)
+        return True
+    except Exception:
+        logger.exception("could not journal the refusal %s; recording it anyway", reason)
+        db.log(KIND_SKIPPED, row)
+        return True
+
+
+def analyst_outage_state() -> dict:
+    """Whether trading has fallen back to unreviewed, since when, and for how much.
+
+    Read from the journal rather than from the worker's memory, so this is the
+    same answer in every process and survives the worker being restarted: the
+    last ``analyst_outage_started`` or ``analyst_outage_ended`` row says which
+    side of the switch we are on, and the unreviewed trades placed since that row
+    are counted by scanning forward from it.
+    """
+    try:
+        with db.conn() as c:
+            marker = c.execute(
+                "SELECT id, ts, kind FROM decisions WHERE kind IN (?,?) "
+                "ORDER BY id DESC LIMIT 1",
+                (KIND_OUTAGE_STARTED, KIND_OUTAGE_ENDED),
+            ).fetchone()
+            if marker is None:
+                return {
+                    "active": False,
+                    "started_at": None,
+                    "unreviewed_trades": 0,
+                    "last_unreviewed_trade_at": None,
+                }
+            unreviewed = 0
+            last_at = None
+            if marker["kind"] == KIND_OUTAGE_STARTED:
+                rows = c.execute(
+                    "SELECT ts FROM decisions WHERE kind=? AND id>=? ORDER BY id",
+                    (KIND_UNREVIEWED_TRADE, marker["id"]),
+                ).fetchall()
+                unreviewed = len(rows)
+                last_at = float(rows[-1]["ts"]) if rows else None
+            return {
+                "active": marker["kind"] == KIND_OUTAGE_STARTED,
+                "started_at": float(marker["ts"]),
+                "unreviewed_trades": unreviewed,
+                "last_unreviewed_trade_at": last_at,
+            }
+    except Exception:
+        logger.warning("could not read the analyst outage state from the journal")
+        return {
+            "active": False,
+            "started_at": None,
+            "unreviewed_trades": 0,
+            "last_unreviewed_trade_at": None,
+        }
+
+
 class PaperWorker:
     """Runs monitor and research cycles on their own cadences."""
 
@@ -157,6 +335,16 @@ class PaperWorker:
         self.last_research_at: float | None = None
         self.next_cycle_at: float | None = None
         self.next_research_at: float | None = None
+        # Analyst outage state. Seeded from the last cycle's health snapshot, so
+        # a worker restarted in the middle of an outage picks the streak back up
+        # instead of spending three more cycles rediscovering it. The analyst is
+        # still asked on the very first cycle after a restart, so an outage that
+        # has actually ended ends immediately either way.
+        health = config.read_health()
+        self._analyst_fail_streak = max(0, int(health.get("analyst_fail_streak") or 0))
+        self._outage_active = bool(health.get("analyst_outage"))
+        self._outage_started_at = health.get("analyst_outage_started_at") or None
+        self._unreviewed_trades = max(0, int(health.get("unreviewed_trades_this_outage") or 0))
 
     # ---------------------------------------------------------------- helpers
 
@@ -204,20 +392,116 @@ class PaperWorker:
 
     # ---------------------------------------------------------------- planner
 
-    def _skip(self, reason: str, cycle_no: int, symbols: list[str]) -> dict:
-        """Record a refused cycle: one ``worker_skipped`` row, no order."""
-        db.log(
-            "worker_skipped",
-            {
-                "cycle": cycle_no,
-                "refusal_reason": reason,
-                "symbols": symbols,
-            },
+    def _skip(self, reason: str, cycle_no: int, symbols: list[str], **extra) -> dict:
+        """Record a refused cycle: no order, and one row unless it is a repeat.
+
+        The row is throttled per reason, so a refusal that repeats every cycle
+        fills the journal once an hour instead of once a minute. The console line
+        is printed every cycle either way: the log is cheap and local, the
+        journal is the record someone reads later.
+        """
+        written = _journal_skip(
+            reason, {"cycle": cycle_no, "symbols": symbols, **extra}
         )
         self._log(f"cycle {cycle_no}: planner refused to trade ({reason})")
-        return {"verdict": VERDICT_REFUSED, "refusal_reason": reason}
+        if not written:
+            self._log(
+                f"cycle {cycle_no}: same refusal already on record, not journalled again "
+                f"({reason})"
+            )
+        return {
+            "verdict": VERDICT_REFUSED,
+            "refusal_reason": reason,
+            "refusal_logged": written,
+        }
 
-    def _execute_once(self, planner_module, plan: dict, cycle_no: int, symbols: list[str]) -> dict:
+    def _rules_only_this_cycle(self) -> bool:
+        """Whether this cycle's plan may be built without the analyst.
+
+        The analyst is asked for first on every cycle regardless of this answer:
+        ``planner.plan`` always consults it, and only the *outcome* may be a
+        rules-only plan. So a healthy analyst still vetoes, and a recovered one
+        puts the very next cycle back on reviewed trading.
+
+        Two ways in. An outage already in progress stays open until the analyst
+        answers. Otherwise this cycle is the one that would reach the limit, so
+        the fallback is permitted now rather than the cycle refusing and then
+        trading on the next tick -- which would mean asking the planner twice in
+        one cycle and burning the quota we are already out of.
+        """
+        if self._outage_active:
+            return True
+        return self._analyst_fail_streak + 1 >= self.cfg.analyst_outage_cycles
+
+    def _note_analyst_outcome(self, available: bool, cycle_no: int) -> None:
+        """Update the outage from what this cycle's plan says about the analyst.
+
+        Each transition is journalled exactly once, on the cycle it happens. An
+        outage that lasts a hundred cycles therefore costs two rows, and a
+        thousand failed ones are refused and throttled rather than narrated.
+
+        A cycle refused for some other reason -- no setup, stale candles -- says
+        nothing about the analyst, so it neither extends nor clears the streak:
+        the count is of cycles in which the analyst did not answer, not of
+        consecutive refusals.
+        """
+        if available:
+            self._analyst_fail_streak = 0
+            if self._outage_active:
+                self._outage_active = False
+                db.log(
+                    KIND_OUTAGE_ENDED,
+                    {
+                        "cycle": cycle_no,
+                        "outage_started_at": self._outage_started_at,
+                        "outage_seconds": round(time.time() - float(self._outage_started_at or 0), 3),
+                        "unreviewed_trades": self._unreviewed_trades,
+                        "detail": (
+                            "the analyst answered again, so reviewed trading has resumed by "
+                            "itself: no restart and no manual step were needed"
+                        ),
+                    },
+                )
+                self._log(
+                    f"cycle {cycle_no}: the analyst answered, so trading is reviewed again "
+                    f"({self._unreviewed_trades} unreviewed trade(s) during the outage)"
+                )
+            return
+
+        self._analyst_fail_streak += 1
+        limit = self.cfg.analyst_outage_cycles
+        if not self._outage_active and self._analyst_fail_streak >= limit:
+            self._outage_active = True
+            self._outage_started_at = time.time()
+            self._unreviewed_trades = 0
+            db.log(
+                KIND_OUTAGE_STARTED,
+                {
+                    "cycle": cycle_no,
+                    "outage_cycles": limit,
+                    "failed_cycles": self._analyst_fail_streak,
+                    "detail": (
+                        f"the analyst did not answer for {self._analyst_fail_streak} cycles "
+                        "running, so this cycle trades on rules alone; every trade it places "
+                        "is recorded as unreviewed, and it is tried again next cycle"
+                    ),
+                },
+            )
+            self._log(
+                f"cycle {cycle_no}: the analyst has not answered for "
+                f"{self._analyst_fail_streak} cycles, so trading continues unreviewed "
+                "(every trade is stamped as unreviewed; it is tried again each cycle)"
+            )
+
+    def _execute_once(
+        self,
+        planner_module,
+        plan: dict,
+        cycle_no: int,
+        symbols: list[str],
+        *,
+        unreviewed: bool = False,
+    ) -> dict:
         """The one order this cycle may place.
 
         Every order the worker places comes through here, and the count is per
@@ -225,17 +509,21 @@ class PaperWorker:
         journal and in the log, without reaching ``planner.execute`` -- so a
         cycle cannot place two orders even if a later edit asks it to try again.
         The next cycle starts with the allowance back.
+
+        Unreviewed mode changes nothing here. An outage trade is stamped and
+        journalled in addition to the ordinary record; it spends the cycle's one
+        allowance exactly like a reviewed one, and a halted worker never reaches
+        this method at all.
         """
         if self._cycle_trades >= MAX_TRADES_PER_CYCLE:
             self._log(
                 f"cycle {cycle_no}: refused, this cycle already placed its one trade "
                 "and will not place another"
             )
-            db.log(
-                "worker_skipped",
+            _journal_skip(
+                TOO_MANY_TRADES,
                 {
                     "cycle": cycle_no,
-                    "refusal_reason": TOO_MANY_TRADES,
                     "symbols": symbols,
                     "detail": (
                         f"a cycle places at most {MAX_TRADES_PER_CYCLE} trade; this one "
@@ -254,54 +542,127 @@ class PaperWorker:
         result = planner_module.execute(plan)
         if isinstance(result, dict) and result.get("executed"):
             self.trades_placed += 1
+            if unreviewed:
+                self._unreviewed_trades += 1
+                db.log(
+                    KIND_UNREVIEWED_TRADE,
+                    {
+                        "cycle": cycle_no,
+                        "symbol": result.get("symbol"),
+                        "side": result.get("side"),
+                        "qty": result.get("qty"),
+                        "price": result.get("price"),
+                        "strategy_id": result.get("strategy_id"),
+                        "analyst_available": False,
+                        "analyst_bypassed": True,
+                        "outage_started_at": self._outage_started_at,
+                        "unreviewed_in_this_outage": self._unreviewed_trades,
+                        "detail": UNREVIEWED_NOTE,
+                    },
+                )
             self._log(
-                f"cycle {cycle_no}: placed 1 trade: {result.get('side')} "
+                f"cycle {cycle_no}: placed 1 "
+                f"{'UNREVIEWED ' if unreviewed else ''}trade: {result.get('side')} "
                 f"{result.get('symbol')} qty {result.get('qty')} @ {result.get('price')}"
             )
         return result
+
+    def _ask_planner(
+        self, planner_module, symbols: list[str], interval: str, max_risk: float, rules_only: bool
+    ):
+        """One planner call for this cycle.
+
+        Returns the plan the planner produced, or a refusal reason as a string
+        when the call itself failed. A string is not something ``plan`` can
+        return, so the two are never confused.
+
+        ``allow_rules_only`` is passed only when this cycle may fall back. The
+        planner asks the analyst either way, so this never decides to skip the
+        analyst -- it only decides whether an unanswered analyst ends the cycle
+        or is an allowed outcome.
+        """
+        kwargs = {"symbols": symbols, "max_risk": max_risk, "interval": interval}
+        if rules_only:
+            kwargs["allow_rules_only"] = True
+        try:
+            return planner_module.plan(**kwargs)
+        except TypeError:
+            # Tolerate a planner that does not take the optional keywords yet.
+            try:
+                return planner_module.plan(symbols=symbols)
+            except Exception as exc:
+                logger.exception("paper planner failed on cycle %s", self.cycle)
+                return f"{PLANNER_ERROR}: {type(exc).__name__}"
+        except Exception as exc:
+            logger.exception("paper planner failed on cycle %s", self.cycle)
+            return f"{PLANNER_ERROR}: {type(exc).__name__}: {exc}"
 
     def _run_planner_cycle(
         self, symbols: list[str], interval: str, max_risk: float, cycle_no: int
     ) -> dict:
         """Ask the planner for a plan and trade it only if it is clean.
 
-        The planner is called exactly once here. A refusal is final for this
-        cycle: no second plan, no retry, so one tick cannot produce two jobs.
+        The planner is called exactly once here, in every outcome: a refusal is
+        final for this cycle, so one tick cannot produce two jobs and a quota
+        that is already spent is not hammered twice for the price of one answer.
         """
         planner_module = _load_planner()
         if planner_module is None:
-            # No planner means no analyst gate. Refuse rather than trade raw
-            # signals: a blind rules-only trade is exactly what this gate exists
-            # to prevent.
+            # No planner means no risk rules at all, which is a different fault
+            # from a silent analyst and is not something unreviewed trading
+            # forgives: there would be nothing checking size, bracket or cash.
             return self._skip(PLANNER_UNAVAILABLE, cycle_no, symbols)
 
-        try:
-            plan = planner_module.plan(symbols=symbols, max_risk=max_risk, interval=interval)
-        except TypeError:
-            # Tolerate a planner that does not take the optional keywords yet.
-            try:
-                plan = planner_module.plan(symbols=symbols)
-            except Exception as exc:
-                logger.exception("paper planner failed on cycle %s", cycle_no)
-                return self._skip(f"{PLANNER_ERROR}: {type(exc).__name__}", cycle_no, symbols)
-        except Exception as exc:
-            logger.exception("paper planner failed on cycle %s", cycle_no)
-            return self._skip(f"{PLANNER_ERROR}: {type(exc).__name__}: {exc}", cycle_no, symbols)
+        rules_only = self._rules_only_this_cycle()
+        plan = self._ask_planner(planner_module, symbols, interval, max_risk, rules_only)
+
+        if isinstance(plan, str):
+            # _ask_planner returns a reason string rather than raising, so one
+            # bad cycle cannot cost the next one.
+            return self._skip(plan, cycle_no, symbols)
 
         if not isinstance(plan, dict):
             return self._skip(f"{PLANNER_ERROR}: plan was not a mapping", cycle_no, symbols)
 
         refusal = plan.get("refusal_reason")
-        if refusal:
-            return self._skip(str(refusal), cycle_no, symbols)
+        analyst_available = bool(plan.get("analyst_available"))
 
-        if not plan.get("analyst_available"):
-            # The plan was built without the analyst. Refusing it is the point
-            # of the gate: rules-only trades stay out.
-            return self._skip(PLANNER_ANALYST_UNAVAILABLE, cycle_no, symbols)
+        if refusal:
+            if str(refusal) == PLANNER_ANALYST_UNAVAILABLE:
+                # The planner is reporting the analyst's silence itself. That is
+                # the same fact the ``analyst_available`` check below reads, and
+                # it must be counted the same way.
+                self._note_analyst_outcome(False, cycle_no)
+            return self._skip(str(refusal), cycle_no, symbols, outage=self._outage_active)
+
+        if not analyst_available:
+            # A clean plan with no analyst opinion. Refused while the analyst is
+            # healthy; in an outage this is the outcome the fallback exists for.
+            self._note_analyst_outcome(False, cycle_no)
+            if not rules_only or not self._outage_active:
+                # Either the outage has not been declared yet, or this cycle's
+                # plan was asked for without the fallback and came back without
+                # an analyst. Both are refusals.
+                return self._skip(PLANNER_ANALYST_UNAVAILABLE, cycle_no, symbols)
+            unreviewed = True
+        else:
+            # The analyst answered, which is also what ends an outage in progress.
+            self._note_analyst_outcome(True, cycle_no)
+            unreviewed = False
+
+        if unreviewed:
+            # Stamped on the plan itself, so the order record and the journal row
+            # the planner writes both carry it: no record can be read as reviewed.
+            plan["analyst_available"] = False
+            plan["analyst_bypassed"] = True
+            plan["analyst_outage"] = True
+            plan["analyst_outage_started_at"] = self._outage_started_at
+            plan["unreviewed_reason"] = UNREVIEWED_NOTE
 
         try:
-            result = self._execute_once(planner_module, plan, cycle_no, symbols)
+            result = self._execute_once(
+                planner_module, plan, cycle_no, symbols, unreviewed=unreviewed
+            )
         except Exception as exc:
             logger.exception("paper planner execute failed on cycle %s", cycle_no)
             return self._skip(f"{PLANNER_ERROR}: {type(exc).__name__}: {exc}", cycle_no, symbols)
@@ -314,7 +675,14 @@ class PaperWorker:
                 str(result.get("refusal_reason") or PLANNER_ERROR), cycle_no, symbols
             )
 
-        return {"verdict": VERDICT_EXECUTED, "refusal_reason": "", "execute": result}
+        return {
+            "verdict": VERDICT_EXECUTED,
+            "refusal_reason": "",
+            "execute": result,
+            "analyst_available": analyst_available,
+            "unreviewed": unreviewed,
+            "outage": self._outage_active,
+        }
 
     def _manage_exits(self, cycle_no: int) -> list[dict]:
         """Act on every open position's stop, target, max hold or signal flip.
@@ -431,6 +799,12 @@ class PaperWorker:
                 last_success=self.last_success or read_health().get("last_success"),
                 next_cycle_at=self.next_cycle_at,
                 next_research_at=self.next_research_at,
+                # Carried through a halted cycle unchanged, so a halted worker
+                # cannot make an outage look like it ended while nothing ran.
+                analyst_fail_streak=self._analyst_fail_streak,
+                analyst_outage=self._outage_active,
+                analyst_outage_started_at=self._outage_started_at,
+                unreviewed_trades_this_outage=self._unreviewed_trades,
                 skipped=True,
             )
             self._log(f"cycle {cycle_no}: halted, not trading")
@@ -442,6 +816,8 @@ class PaperWorker:
                 "trades_placed": 0,
                 # Named rather than hidden: while halted, no position is managed.
                 "unmanaged_positions": unmanaged,
+                "analyst_outage": self._outage_active,
+                "unreviewed": False,
             }
 
         watchlist = self.cfg.symbols
@@ -455,7 +831,10 @@ class PaperWorker:
         max_risk = load_max_risk()
         verdict = ""
         refusal_reason = ""
+        refusal_logged = None
         exits: list[dict] = []
+        analyst_available: bool | None = None
+        unreviewed = False
 
         try:
             if self._research_due(started):
@@ -475,6 +854,9 @@ class PaperWorker:
             monitor_seconds = time.time() - t0
             verdict = outcome["verdict"]
             refusal_reason = outcome.get("refusal_reason", "")
+            refusal_logged = outcome.get("refusal_logged")
+            analyst_available = outcome.get("analyst_available")
+            unreviewed = bool(outcome.get("unreviewed"))
             self.last_monitor_at = time.time()
             self.last_success = time.time()
             status = "refused" if verdict == VERDICT_REFUSED else status
@@ -514,6 +896,16 @@ class PaperWorker:
             trades_placed=self._cycle_trades,
             trades_placed_this_run=self.trades_placed,
             last_exits=[e["symbol"] for e in exits],
+            # The analyst's state as of this cycle, so ``--status`` in another
+            # shell can answer "is it answering, and since when" from the
+            # database rather than from a process that may not be running.
+            analyst_available=analyst_available,
+            analyst_fail_streak=self._analyst_fail_streak,
+            analyst_outage=self._outage_active,
+            analyst_outage_started_at=self._outage_started_at,
+            analyst_outage_cycles=self.cfg.analyst_outage_cycles,
+            unreviewed_trades_this_outage=self._unreviewed_trades,
+            last_cycle_unreviewed=unreviewed,
             last_success=self.last_success,
             last_monitor_at=self.last_monitor_at,
             last_research_at=self.last_research_at,
@@ -524,17 +916,25 @@ class PaperWorker:
         self._log(
             f"cycle {cycle_no}: {status} in {finished - started:.1f}s "
             f"(research={'yes' if research_ran else 'no'}, closed={len(exits)}, "
-            f"planner={verdict or 'none'}) {','.join(watchlist)}"
+            f"planner={verdict or 'none'}"
+            f"{', UNREVIEWED' if unreviewed else ''}) {','.join(watchlist)}"
         )
         return {
             "status": status,
             "cycle": cycle_no,
             "planner_verdict": verdict or "none",
             "refusal_reason": refusal_reason,
+            # False when the refusal was already on record inside the throttle
+            # window, so a reader can tell "not journalled" from "not refused".
+            "refusal_logged": refusal_logged,
             "symbols_scanned": list(watchlist),
             "max_risk": max_risk,
             # Counted, not inferred: 0 or 1, never more, for this cycle.
             "trades_placed": self._cycle_trades,
+            "analyst_available": analyst_available,
+            "analyst_outage": self._outage_active,
+            "unreviewed": unreviewed,
+            "unreviewed_trades_this_outage": self._unreviewed_trades,
             "seconds": round(finished - started, 3),
             "research_ran": research_ran,
             "exits": exits,
@@ -612,6 +1012,7 @@ def status(cfg: PaperConfig | None = None) -> dict:
     """Read worker health straight from the database."""
     cfg = cfg or config.load()
     health = config.read_health()
+    outage = analyst_outage_state()
     with db.conn() as c:
         hb = c.execute("SELECT * FROM heartbeat WHERE id=1").fetchone()
     return {
@@ -635,6 +1036,16 @@ def status(cfg: PaperConfig | None = None) -> dict:
         "unmanaged_positions": health.get("unmanaged_positions", []) or [],
         "next_cycle_at": health.get("next_cycle_at"),
         "next_research_at": health.get("next_research_at"),
+        # Whether the analyst answered on the last cycle, whether trading has
+        # fallen back to unreviewed, since when, and how much has traded that
+        # way. Taken from the journal rather than from the worker's memory, so a
+        # status printed while no worker is running is still true.
+        "analyst_available": health.get("analyst_available"),
+        "analyst_fail_streak": health.get("analyst_fail_streak", 0),
+        "analyst_outage": outage["active"],
+        "analyst_outage_started_at": outage["started_at"],
+        "analyst_outage_cycles": cfg.analyst_outage_cycles,
+        "unreviewed_trades_this_outage": outage["unreviewed_trades"],
     }
 
 
@@ -644,12 +1055,69 @@ def _fmt_ts(value) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(value)))
 
 
+def _fmt_ago(value) -> str:
+    """How long ago something happened, in words a trader reads at a glance."""
+    if not value:
+        return "never"
+    try:
+        seconds = max(0, int(time.time() - float(value)))
+    except (TypeError, ValueError):
+        return "never"
+    if seconds < 90:
+        return "moments ago"
+    if seconds < 5400:
+        return f"{seconds // 60} minutes ago"
+    if seconds < 172800:
+        return f"{seconds // 3600} hours ago"
+    return f"{seconds // 86400} days ago"
+
+
+def _analyst_lines(state: dict) -> list[str]:
+    """Two or three lines saying whether anything is reviewing these trades.
+
+    Plain words on purpose. The reader is looking at a status screen wondering
+    why nothing is trading, and the answer has to survive being read by someone
+    who does not know what a planner is.
+    """
+    available = state.get("analyst_available")
+    streak = int(state.get("analyst_fail_streak") or 0)
+    limit = state.get("analyst_outage_cycles") or config.DEFAULT_ANALYST_OUTAGE_CYCLES
+    if state.get("analyst_outage"):
+        since = state.get("analyst_outage_started_at")
+        return [
+            "  AI reviewer      : NOT ANSWERING - it is being asked every cycle and is not replying",
+            "  trading mode     : UNREVIEWED - rules only, and it is checked again every cycle",
+            f"  unreviewed since : {_fmt_ts(since)} ({_fmt_ago(since)})",
+            f"  unreviewed trades: {state.get('unreviewed_trades_this_outage', 0)} placed with no AI review",
+            "  what to do       : wait - the next cycle tries the reviewer again and goes back to",
+            "                     reviewed trading by itself as soon as it answers. Nothing to restart.",
+        ]
+    if available:
+        return [
+            "  AI reviewer      : answering - it reviews each trade before it is placed",
+            "  trading mode     : reviewed - every trade has an AI opinion behind it",
+        ]
+    if streak:
+        remaining = max(0, int(limit) - streak)
+        return [
+            f"  AI reviewer      : not answering - {streak} cycle(s) in a row so far",
+            "  trading mode     : still waiting for it; nothing is placed without a review",
+            f"  gives up waiting : after {limit} cycles in a row, and then trades on rules alone",
+            f"  cycles to wait   : {remaining} more",
+        ]
+    return [
+        "  AI reviewer      : no answer yet this run",
+        "  trading mode     : waiting for its first opinion before it places anything",
+    ]
+
+
 def format_status(state: dict) -> str:
     hb = state["heartbeat"] or {}
     health = state["health"]
     lines = [
         "Paper worker status",
         f"  kill switch      : {'HALTED (not trading)' if state['halted'] else 'running'}",
+        *_analyst_lines(state),
         f"  watchlist        : {','.join(state['symbols'])} @ {state['interval']}",
         f"  monitor cadence  : {state['monitor_seconds']}s",
         f"  research cadence : {state['research_seconds']}s",

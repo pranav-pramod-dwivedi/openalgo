@@ -1,36 +1,51 @@
 import { useMemo } from 'react'
 import { Link } from 'react-router'
-import { EmptyNote, LoadingNote, StaleNote, UpdatedAt, useSnapshot } from '../components'
-import { assetGlyph, assetName, money, qty, relativeTime, signedMoney, toFillRows } from '../derive'
+import {
+  ACCOUNT_LABEL,
+  NOT_REPORTED,
+  PAPER_COMMAND,
+  paperFillRows,
+  SANDBOX_LABEL,
+  VIRGIN_DETAIL,
+  VIRGIN_TITLE,
+} from '../account'
+import {
+  EmptyNote,
+  LoadingNote,
+  SandboxPanel,
+  StaleNote,
+  TwoAccountsNote,
+  UpdatedAt,
+  useSnapshot,
+} from '../components'
+import { assetName, money, qty, relativeTime, signedMoney } from '../derive'
 import ExportFillsButton from '../ExportFillsButton'
-import { toAmounts } from '../useWalletSnapshot'
 
 /**
- * Wallet. The prototype listed a Chase account and a Coinbase wallet and
- * offered deposit and withdraw buttons. None of that exists here, so this page
- * shows the two venues that actually hold the money - Binance Spot and Binance
- * USD-M Futures - read from the exchange, and says plainly that transfers are
- * not wired up rather than pretending a button works.
+ * Wallet.
+ *
+ * The prototype listed a Chase account and a Coinbase wallet and offered deposit
+ * and withdraw buttons. None of that exists, and there is nothing to connect:
+ * the only account this surface holds is virtual, so the page shows what the
+ * paper ledger reports about it and nothing else.
+ *
+ * The Binance testnet wallet is a different account with different money, so it
+ * appears in its own panel at the foot of the page rather than as "venues" of
+ * this one.
  */
 export default function WalletPage() {
   const snapshot = useSnapshot()
-  const amounts = toAmounts(snapshot.funds)
-  const fills = useMemo(() => toFillRows(snapshot.trades), [snapshot.trades])
+  const account = snapshot.account.figures
+  const fills = useMemo(() => paperFillRows(account?.fills ?? []), [account?.fills])
 
-  if (snapshot.loading && !snapshot.funds) {
+  if (snapshot.account.loading && !account) {
     return (
       <div className="content-wrap page-view is-visible">
-        <LoadingNote label="Reading your balances" />
+        <LoadingNote label="Reading your virtual balances" />
       </div>
     )
   }
 
-  const spotBalances = (snapshot.funds?.spot_balances ?? []).filter(
-    (balance) => (balance.total ?? balance.free ?? 0) > 0
-  )
-  const futuresBalances = (snapshot.funds?.futures_balances ?? []).filter(
-    (balance) => (balance.balance ?? 0) > 0
-  )
   const recentFills = fills.slice(0, 5)
 
   return (
@@ -38,16 +53,16 @@ export default function WalletPage() {
       <section className="page-intro page-intro-inner">
         <div>
           <p className="eyebrow">
-            Wallet <span className="eyebrow-line" /> Connected money
+            Wallet <span className="eyebrow-line" /> {ACCOUNT_LABEL}
           </p>
           <h1>
-            Your money,
+            Your virtual money,
             <br />
             <span className="period">accounted for.</span>
           </h1>
           <p className="intro-copy">
-            Every balance below was read from the exchange just now, not carried over from a
-            previous session.
+            Every balance below was read from the paper ledger just now, not carried over from a
+            previous session. None of it is deposited anywhere and none of it can be withdrawn.
           </p>
         </div>
         <Link className="ghost-button" to="/manage">
@@ -56,30 +71,42 @@ export default function WalletPage() {
         </Link>
       </section>
 
-      {snapshot.stale && <StaleNote />}
+      <TwoAccountsNote />
+
+      {snapshot.account.stale && <StaleNote />}
+
+      {account?.virgin ? (
+        <section className="surface-card">
+          <EmptyNote title={VIRGIN_TITLE} detail={VIRGIN_DETAIL} />
+          <div className="pp-note pp-note-quiet">
+            There is deliberately no balance shown above it: an empty ledger reported as a figure
+            would read as a real one.
+          </div>
+        </section>
+      ) : null}
 
       <section className="wallet-page-grid">
         <article className="wallet-balance surface-card">
-          <span className="card-label">Available to trade</span>
-          <div className="wallet-balance-number">{amounts ? money(amounts.tradable) : '—'}</div>
+          <span className="card-label">Virtual cash</span>
+          <div className="wallet-balance-number">{read(account?.cash ?? null, money)}</div>
           <div className="wallet-balance-foot">
-            <span>Ready for new orders</span>
-            <a className="dark-small-button" href="/trading">
-              Open terminal <span>↗</span>
-            </a>
+            <span>Ready for the next virtual order</span>
+            <Link className="dark-small-button" to="/paper">
+              Paper engine <span>↗</span>
+            </Link>
           </div>
         </article>
         <article className="wallet-balance surface-card wallet-invested">
-          <span className="card-label">Protected savings</span>
-          <div className="wallet-balance-number">{amounts ? money(amounts.savings) : '—'}</div>
+          <span className="card-label">Equity</span>
+          <div className="wallet-balance-number">{read(account?.equity ?? null, money)}</div>
           <div className="wallet-balance-foot">
             <span>
-              {amounts && amounts.equity > 0
-                ? `${((amounts.savings / amounts.equity) * 100).toFixed(1)}% of equity`
-                : 'Share unknown'}
+              {account?.cashShare === null || account?.cashShare === undefined
+                ? 'Share unknown'
+                : `${account.cashShare.toFixed(1)}% of equity is still cash`}
             </span>
             <Link className="outline-small-button" to="/manage">
-              How it is protected <span>↗</span>
+              Where it goes <span>↗</span>
             </Link>
           </div>
         </article>
@@ -89,53 +116,49 @@ export default function WalletPage() {
         <article className="wallet-account-card surface-card">
           <div className="section-heading compact-heading">
             <div>
-              <span className="card-label">Venues</span>
-              <h2>Where the balance lives</h2>
+              <span className="card-label">Where it sits</span>
+              <h2>The virtual account</h2>
             </div>
           </div>
 
-          {spotBalances.length === 0 && futuresBalances.length === 0 ? (
-            <EmptyNote
-              title="The exchange reported no balances"
-              detail="Nothing is held in spot or futures right now."
-            />
+          {!account ? (
+            <LoadingNote />
           ) : (
-            <>
-              {spotBalances.map((balance) => (
-                <div className="connected-row" key={`spot-${balance.asset}`}>
-                  <span className="bank-glyph">{assetGlyph(balance.asset)}</span>
-                  <span>
-                    <strong>
-                      {assetName(balance.asset)} <small>· Spot</small>
-                    </strong>
-                    <small>
-                      {qty(balance.total ?? balance.free ?? 0)} {balance.asset}
-                      {balance.locked ? ` · ${qty(balance.locked)} locked in orders` : ''}
-                    </small>
-                  </span>
-                  <span className="connected-check">✓</span>
-                </div>
-              ))}
-              {futuresBalances.map((balance) => (
-                <div className="connected-row" key={`fut-${balance.asset}`}>
-                  <span className="bank-glyph crypto-glyph">{assetGlyph(balance.asset)}</span>
-                  <span>
-                    <strong>
-                      {assetName(balance.asset)} <small>· Futures margin</small>
-                    </strong>
-                    <small>
-                      {qty(balance.available ?? balance.balance ?? 0)} {balance.asset} available
-                    </small>
-                  </span>
-                  <span className="connected-check">✓</span>
-                </div>
-              ))}
-            </>
+            <div className="settings-list">
+              <div>
+                <span>
+                  <strong>Cash</strong>
+                  <small>What the next order may spend</small>
+                </span>
+                <b>{read(account.cash, money)}</b>
+              </div>
+              <div>
+                <span>
+                  <strong>Open positions</strong>
+                  <small>Sum of the marks the ledger reports</small>
+                </span>
+                <b>{read(account.openPositionValue, money)}</b>
+              </div>
+              <div>
+                <span>
+                  <strong>Margin held against shorts</strong>
+                  <small>Posted, so not spendable</small>
+                </span>
+                <b>{read(account.shortMarginLocked, money)}</b>
+              </div>
+              <div>
+                <span>
+                  <strong>Worker</strong>
+                  <small>The process that places the virtual orders</small>
+                </span>
+                <b>{account.worker?.status ?? NOT_REPORTED}</b>
+              </div>
+            </div>
           )}
 
           <div className="pp-note">
-            Deposits and withdrawals are not connected in this build. Move funds on the exchange
-            itself; this page will show the new balance on the next refresh.
+            {ACCOUNT_LABEL} only. Nothing here is held at an exchange, because there is no exchange
+            holding it for you: the ledger simulates the fills and keeps the balance itself.
           </div>
         </article>
 
@@ -143,17 +166,14 @@ export default function WalletPage() {
           <div className="section-heading compact-heading">
             <div>
               <span className="card-label">Last movements</span>
-              <h2>Recent fills</h2>
+              <h2>Recent virtual fills</h2>
             </div>
             <span className="wallet-status">
               <span className="live-dot" /> {fills.length} recorded
             </span>
           </div>
           {recentFills.length === 0 ? (
-            <EmptyNote
-              title="No fills recorded"
-              detail="Executed orders from either venue will list here."
-            />
+            <EmptyNote title={VIRGIN_TITLE} detail={VIRGIN_DETAIL} />
           ) : (
             <div className="activity-list">
               {recentFills.map((fill) => (
@@ -166,12 +186,12 @@ export default function WalletPage() {
                       {fill.action === 'BUY' ? 'Bought' : 'Sold'} {assetName(fill.asset)}
                     </strong>
                     <span>
-                      {qty(fill.quantity)} at {money(fill.price)} · {fill.product}
+                      {qty(fill.quantity)} at {money(fill.price)}
                     </span>
                   </div>
-                  {/* The result belongs beside the fill, not in the time slot,
-                      where a P&L figure reads as a timestamp. */}
-                  <span className="activity-result">{signedMoney(fill.pnl ?? fill.value)}</span>
+                  {/* The value belongs beside the fill, not in the time slot,
+                      where a money figure reads as a timestamp. */}
+                  <span className="activity-result">{money(fill.value)}</span>
                   <time>{relativeTime(fill.at)}</time>
                 </div>
               ))}
@@ -184,7 +204,7 @@ export default function WalletPage() {
         <div className="section-heading compact-heading">
           <div>
             <span className="card-label">Paper trail</span>
-            <h2>Fill history</h2>
+            <h2>Virtual fill history</h2>
           </div>
           <Link className="text-button" to="/transactions">
             Full ledger <span>→</span>
@@ -192,7 +212,10 @@ export default function WalletPage() {
           <ExportFillsButton fills={fills} />
         </div>
         {fills.length === 0 ? (
-          <EmptyNote title="Nothing to show" detail="No executed orders have been reported." />
+          <EmptyNote
+            title={VIRGIN_TITLE}
+            detail={`No virtual order has been executed yet. Run ${PAPER_COMMAND} and they appear here.`}
+          />
         ) : (
           <div className="transfer-ledger">
             {fills.slice(0, 8).map((fill) => (
@@ -205,7 +228,8 @@ export default function WalletPage() {
                     {fill.action === 'BUY' ? 'Bought' : 'Sold'} {assetName(fill.asset)}
                   </strong>
                   <small>
-                    {qty(fill.quantity)} {fill.asset} at {money(fill.price)} · {fill.venue}
+                    {qty(fill.quantity)} {fill.asset} at {money(fill.price)}
+                    {fill.fee === null || fill.fee === undefined ? '' : ` · fee ${money(fill.fee)}`}
                   </small>
                 </span>
                 <strong>{money(fill.value)}</strong>
@@ -222,9 +246,25 @@ export default function WalletPage() {
           </div>
         )}
         <div className="pp-note pp-note-quiet">
-          <UpdatedAt at={snapshot.updatedAt} />
+          <UpdatedAt at={snapshot.account.updatedAt} /> Realized P&amp;L so far:{' '}
+          {read(account?.realized ?? null, signedMoney)}.
         </div>
+      </section>
+
+      <section className="pp-sandbox-section">
+        <div className="section-heading compact-heading">
+          <div>
+            <span className="card-label">A different account</span>
+            <h2>{SANDBOX_LABEL}</h2>
+          </div>
+        </div>
+        <SandboxPanel snapshot={snapshot} />
       </section>
     </div>
   )
+}
+
+/** The ledger figure, or the words for its absence. Never a zero. */
+function read(value: number | null, format: (n: number) => string): string {
+  return value === null ? NOT_REPORTED : format(value)
 }

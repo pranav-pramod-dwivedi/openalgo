@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
+import {
+  ACCOUNT_LABEL,
+  NOT_REPORTED,
+  PAPER_COMMAND,
+  type PaperAccount,
+  SANDBOX_LABEL,
+  TWO_ACCOUNTS,
+} from './account'
 import { money } from './derive'
 import type { WalletSnapshot } from './useWalletSnapshot'
-import { toAmounts } from './useWalletSnapshot'
 
 export const ONBOARDING_STORAGE_KEY = 'pp-onboarded-v1'
 export const REOPEN_ONBOARDING_EVENT = 'pp-reopen-onboarding'
@@ -26,10 +33,16 @@ export function requestReopenOnboarding(): void {
   window.dispatchEvent(new CustomEvent(REOPEN_ONBOARDING_EVENT))
 }
 
+/** The live figure, or the words for its absence. Never a zero. */
+function read(value: number | null): string {
+  return value === null ? NOT_REPORTED : money(value)
+}
+
 /**
- * First-visit overlay. Three plain-word cards, no invented numbers: the only
- * figures shown are the protected/tradable amounts from the live snapshot,
- * and only when the snapshot has actually loaded.
+ * First-visit overlay. It opens on the two accounts, because that is the one
+ * thing a reader cannot work out from the screen: every figure below is virtual
+ * money from the paper ledger, and the terminal they may click through to is a
+ * Binance testnet sandbox that holds none of it.
  */
 export function Onboarding({ snapshot }: { snapshot: WalletSnapshot }) {
   const [open, setOpen] = useState(false)
@@ -57,8 +70,7 @@ export function Onboarding({ snapshot }: { snapshot: WalletSnapshot }) {
 
   if (!open) return null
 
-  const amounts = toAmounts(snapshot.funds)
-  const hasAmounts = amounts !== null
+  const account: PaperAccount | null = snapshot.account.figures
 
   return (
     <div
@@ -77,31 +89,36 @@ export function Onboarding({ snapshot }: { snapshot: WalletSnapshot }) {
         <div className="pp-onboarding-grid">
           <article className="pp-onboarding-step">
             <span className="pp-onboarding-index">1</span>
-            <strong>Protected stays put, tradable moves</strong>
+            <strong>Two accounts, and only one is yours</strong>
+            <p>{TWO_ACCOUNTS}</p>
+          </article>
+          <article className="pp-onboarding-step">
+            <span className="pp-onboarding-index">2</span>
+            <strong>Your account is the virtual one</strong>
             <p>
-              Protected savings is money no order can touch. Tradable is the most any new order may
-              cost.
+              The {ACCOUNT_LABEL.toLowerCase()} is a real ledger running real market mechanics.
+              Cash, equity, realized and unrealized all come from it. Where it has not reported a
+              figure, this surface says so rather than showing a zero.
             </p>
-            {hasAmounts ? (
+            {account ? (
               <small>
-                Right now: {money(amounts.savings)} protected, {money(amounts.tradable)} tradable.
+                Right now: {read(account.cash)} cash, {read(account.equity)} equity,{' '}
+                {account.virgin ? 'no trades yet' : `${account.positions.length} open positions`}.
+              </small>
+            ) : null}
+            {account?.virgin ? (
+              <small>
+                The ledger is empty. Run <code>{PAPER_COMMAND}</code> to start the worker.
               </small>
             ) : null}
           </article>
           <article className="pp-onboarding-step">
-            <span className="pp-onboarding-index">2</span>
-            <strong>This is practice money</strong>
-            <p>
-              This surface reads the testnet, so every figure is for learning. Nothing here moves
-              real funds.
-            </p>
-          </article>
-          <article className="pp-onboarding-step">
             <span className="pp-onboarding-index">3</span>
-            <strong>The AI is not connected yet</strong>
+            <strong>The sandbox is not your money</strong>
             <p>
-              The agent places nothing on this account. It is being wired up, and until then every
-              order is yours.
+              {SANDBOX_LABEL}. The OpenAlgo terminal is useful for charts, order books and
+              strategies, but nothing it shows belongs to this account and nothing in it can be
+              withdrawn.
             </p>
           </article>
         </div>

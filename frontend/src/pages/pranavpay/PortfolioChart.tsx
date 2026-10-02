@@ -5,10 +5,8 @@ import {
   type EquityPoint,
   equityDomain,
   equityToPoints,
-  type FillRow,
   money,
   percent,
-  portfolioSeries,
   signedMoney,
 } from './derive'
 import { toPath } from './useCandles'
@@ -29,37 +27,29 @@ const RANGE_CAPTION: Record<RangeKey, string> = {
 }
 
 /**
- * The portfolio's own value over time, not a market's.
+ * The virtual account's own value over time, not a market's.
  *
- * The prototype charted one instrument's price, which answers "what did BTC
- * do" rather than "what happened to my money". This plots the account: equity
- * reconstructed backwards from the live figure through every fill's realised
- * result, with the head of the curve carrying the live mark. Flat stretches are
- * real - the account did nothing between fills.
+ * This plots the ledger the paper engine stored, one point per cycle, plus the
+ * live figure at the head so the end of the line follows the current marks.
+ * Every point on it was measured by the engine: nothing here is interpolated
+ * from fills or back-filled from a balance, which is what the previous
+ * reconstruction did.
  */
 export function PortfolioChart({
-  liveEquityNow,
-  fills,
-  openPositions,
-  floor,
+  series,
+  equity,
+  startingCash,
   range,
   onRangeChange,
   height = 250,
 }: {
-  liveEquityNow: number | null
-  fills: FillRow[]
-  openPositions: number
-  floor: number
+  series: EquityPoint[]
+  equity: number | null
+  startingCash: number | null
   range: RangeKey
   onRangeChange: (range: RangeKey) => void
   height?: number
 }) {
-  const series = useMemo(
-    () =>
-      liveEquityNow === null ? [] : portfolioSeries(liveEquityNow, fills, openPositions, floor),
-    [liveEquityNow, fills, openPositions, floor]
-  )
-
   const windowed = useMemo(() => {
     if (series.length === 0) return []
     const cutoff = Date.now() - RANGE_MS[range]
@@ -70,19 +60,11 @@ export function PortfolioChart({
   }, [series, range])
 
   const domain = useMemo(
-    () => equityDomain(windowed, liveEquityNow ?? floor),
-    [windowed, liveEquityNow, floor]
+    () => equityDomain(windowed, equity ?? startingCash),
+    [windowed, equity, startingCash]
   )
   const points = useMemo(() => (domain ? equityToPoints(windowed, domain) : []), [windowed, domain])
   const path = useMemo(() => toPath(points), [points])
-  /**
-   * The shaded band is the capital sitting *above the savings floor*, not the
-   * distance to the bottom of the box. Filling to an arbitrary baseline turned
-   * $100 of trading capital into a solid block that looked like a large
-   * position; measured from the line the account promised not to cross, the
-   * band is honestly small.
-   */
-  const baseline = domain?.floorY ?? 100
   /**
    * No fill when there is nothing to fill. A shaded block under a flat line
    * reads as magnitude that is not there - on a quiet account it looked like a
@@ -90,9 +72,7 @@ export function PortfolioChart({
    * movement is below the scale.
    */
   const areaPath =
-    points.length && domain && !domain.effectivelyFlat
-      ? `${path} L 100 ${baseline} L 0 ${baseline} Z`
-      : ''
+    points.length && domain && !domain.effectivelyFlat ? `${path} L 100 100 L 0 100 Z` : ''
 
   const change = useMemo(() => {
     if (windowed.length < 2) return null
@@ -104,15 +84,15 @@ export function PortfolioChart({
   }, [windowed])
 
   const labels = useMemo(() => timeLabels(windowed), [windowed])
-  const tradedCount = windowed.filter((point) => !point.live).length
+  const stored = series.filter((point) => !point.live).length
 
   return (
     <div className="pp-chart">
       <div className="section-heading">
         <div>
-          <span className="card-label">Portfolio</span>
+          <span className="card-label">Virtual account</span>
           <h2>
-            Your capital <span className="heading-count">{RANGE_CAPTION[range]}</span>
+            Your equity <span className="heading-count">{RANGE_CAPTION[range]}</span>
           </h2>
         </div>
         <div className="range-switcher">
@@ -131,7 +111,7 @@ export function PortfolioChart({
       </div>
 
       <div className="chart-summary">
-        {liveEquityNow === null ? (
+        {equity === null ? (
           <span className="chart-value">Reading your account</span>
         ) : change ? (
           <>
@@ -143,8 +123,8 @@ export function PortfolioChart({
           </>
         ) : (
           <>
-            <span className="chart-value">{money(liveEquityNow)}</span>
-            <span className="chart-caption">Total capital</span>
+            <span className="chart-value">{money(equity)}</span>
+            <span className="chart-caption">Total equity</span>
           </>
         )}
       </div>
@@ -152,7 +132,7 @@ export function PortfolioChart({
       {points.length < 2 ? (
         <EmptyNote
           title="Not enough history yet"
-          detail="This line starts from your first closed fill. Trade and close something and it appears here."
+          detail="The paper ledger stores one equity point per worker cycle, so the line begins once the worker has run a few times."
         />
       ) : (
         <div className="chart-wrap" style={{ height }}>
@@ -161,7 +141,7 @@ export function PortfolioChart({
             viewBox="0 0 100 100"
             preserveAspectRatio="none"
             role="img"
-            aria-label={`Portfolio value over the ${RANGE_CAPTION[range].toLowerCase()}`}
+            aria-label={`Virtual account equity over the ${RANGE_CAPTION[range].toLowerCase()}`}
           >
             <path className="chart-grid-line" d="M0 0H100M0 25H100M0 50H100M0 75H100M0 100H100" />
 
@@ -186,14 +166,14 @@ export function PortfolioChart({
         </div>
       )}
 
-      {/* Say plainly how the line was produced. A portfolio curve that silently
+      {/* Say plainly how the line was produced. A curve that silently
           interpolated would be indistinguishable from a broker statement. */}
       <p className="pp-chart-foot">
-        {liveEquityNow === null
-          ? 'Waiting for the exchange.'
+        {equity === null
+          ? 'Waiting for the paper ledger.'
           : domain?.effectivelyFlat
-            ? `Total capital ${money(liveEquityNow)}, of which ${money(Math.max(0, (liveEquityNow ?? 0) - floor))} sits above the ${money(floor)} savings floor. Drawn from ${tradedCount} closed fill${tradedCount === 1 ? '' : 's'} and the live mark; the movement is too small for this scale, so the line reads flat because it is.`
-            : `Total capital ${money(liveEquityNow)}. Drawn from ${tradedCount} closed fill${tradedCount === 1 ? '' : 's'} and the live mark — the flat stretches are days you did not trade.`}
+            ? `Total equity ${money(equity)}, from ${startingCash === null ? 'an unreported' : money(startingCash)} of starting capital. Drawn from ${stored} stored point${stored === 1 ? '' : 's'} and the live figure; the movement is too small for this scale, so the line reads flat because it is.`
+            : `Total equity ${money(equity)}. Drawn from ${stored} stored point${stored === 1 ? '' : 's'} and the live figure — the flat stretches are cycles where the worker placed nothing.`}
       </p>
     </div>
   )

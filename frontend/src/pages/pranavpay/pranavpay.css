@@ -1073,3 +1073,53 @@
   overflow-wrap: anywhere;
 }
 .pp-root .pp-why-missing { margin: 0; color: var(--muted); font-size: 9.5px; }
+
+/* ---------------------------------------------------------------------------
+ * Two accounts.
+ *
+ * The virtual account is the page's own surface: cards read it with no
+ * qualifier. The Binance testnet sandbox is money that is not the user's, so it
+ * is marked twice over - a standing banner on every page, and a dashed card
+ * wherever one of its figures appears. The dashed edge and the single amber
+ * token are the whole visual vocabulary: a sandbox card must not be mistaken
+ * for an account card at a glance.
+ * ------------------------------------------------------------------------- */
+.pp-root { --sandbox: #b45309; }
+.pp-root[data-theme='dark'] { --sandbox: #f59e0b; }
+
+.pp-root .pp-two-accounts {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ink);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--muted-dark);
+  font-size: 10px;
+  line-height: 1.55;
+}
+.pp-root .pp-two-accounts-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.pp-root .pp-two-accounts strong { color: var(--ink); font-weight: 700; }
+
+.pp-root .pp-sandbox-label {
+  color: var(--sandbox);
+  font-weight: 700;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.pp-root article.pp-sandbox-card {
+  border: 1px dashed var(--sandbox);
+  background: var(--surface);
+}
+.pp-root .pp-sandbox-section { display: grid; gap: 12px; margin-top: 22px; }
+.pp-root .pp-sandbox-section > .section-heading { margin: 0; }
+.pp-root .pp-sandbox-section h2 { color: var(--muted); }
+.pp-root .pp-account-sandbox-panel { border: 1px dashed var(--sandbox); }

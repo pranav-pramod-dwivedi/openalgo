@@ -1,20 +1,33 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import {
+  ACCOUNT_LABEL,
+  accountAlerts,
+  NOT_REPORTED,
+  PAPER_COMMAND,
+  type PaperAccount,
+  paperEquitySeries,
+  paperFillRows,
+  realisedByDay,
+  SANDBOX_LABEL,
+  VIRGIN_DETAIL,
+  VIRGIN_POSITIONS_DETAIL,
+  VIRGIN_POSITIONS_TITLE,
+  VIRGIN_TITLE,
+} from '../account'
+import {
   CapitalSplit,
   EmptyNote,
   LoadingNote,
+  SandboxPanel,
   StaleNote,
+  TwoAccountsNote,
   UpdatedAt,
   useSnapshot,
 } from '../components'
 import {
-  alerts,
-  allocation,
   assetName,
   baseAsset,
-  dailyRealised,
-  derive,
   greetingFor,
   introFor,
   money,
@@ -23,56 +36,66 @@ import {
   qty,
   relativeTime,
   signedMoney,
-  toFillRows,
   useNow,
 } from '../derive'
 import { PnlCalendar } from '../PnlCalendar'
 import { PortfolioChart, type RangeKey } from '../PortfolioChart'
 import { PortfolioFacts } from '../PortfolioFacts'
 import { PriceTile } from '../PriceChart'
-import { liveEquity, liveUnrealised, useLiveMarks, useWatchedMarkets } from '../useLiveMarks'
-import { toAmounts } from '../useWalletSnapshot'
+import {
+  livePaperEquity,
+  liveUnrealised,
+  markPosition,
+  useLiveMarks,
+  useWatchedMarkets,
+} from '../useLiveMarks'
 
 export default function OverviewPage() {
   const snapshot = useSnapshot()
   const now = useNow()
   const [range, setRange] = useState<RangeKey>('1M')
-  const amounts = toAmounts(snapshot.funds)
-  const fills = useMemo(() => toFillRows(snapshot.trades), [snapshot.trades])
-  const health = useMemo(() => derive(snapshot), [snapshot])
-  const slices = useMemo(() => allocation(snapshot.funds, snapshot.positions), [snapshot])
-  const notices = useMemo(() => alerts(snapshot), [snapshot])
-  const realisedByDay = useMemo(() => dailyRealised(fills), [fills])
+  const account = snapshot.account.figures
+  const fills = useMemo(() => paperFillRows(account?.fills ?? []), [account?.fills])
+  const series = useMemo(() => (account ? paperEquitySeries(account) : []), [account])
+  const notices = useMemo(
+    () => accountAlerts(account, { stale: snapshot.account.stale }),
+    [account, snapshot.account.stale]
+  )
+  const byDay = useMemo(
+    () => (account ? realisedByDay(account) : new Map<string, number>()),
+    [account]
+  )
   const lastSevenDays = useMemo(
     () =>
-      [...realisedByDay.entries()]
+      [...byDay.entries()]
         .sort((a, b) => a[0].localeCompare(b[0]))
         .slice(-7)
         .map(([day, value]) => ({ day, value })),
-    [realisedByDay]
+    [byDay]
   )
-  const { prices, isLive, isStreaming } = useLiveMarks(snapshot)
-  const watched = useWatchedMarkets(snapshot)
+  const { prices, isLive, isStreaming } = useLiveMarks(account)
+  const watched = useWatchedMarkets(account)
 
   const marketSymbols = useMemo(
-    () => [...new Set([...snapshot.positions.map((p) => p.symbol), ...watched])].slice(0, 3),
-    [snapshot.positions, watched]
+    () =>
+      [...new Set([...(account?.positions ?? []).map((p) => p.symbol), ...watched])].slice(0, 3),
+    [account?.positions, watched]
   )
 
-  const liveTotal = liveEquity(snapshot, prices)
-  const liveOpenPnl = liveUnrealised(snapshot.positions, prices)
-
-  if (snapshot.loading && !snapshot.funds) {
+  if (snapshot.account.loading && !account) {
     return (
       <div className="content-wrap page-view is-visible" id="quickOverviewPage">
-        <LoadingNote label="Reading your Binance account" />
+        <LoadingNote label="Reading your virtual account" />
       </div>
     )
   }
 
-  const totalBalance = liveTotal ?? amounts?.equity ?? null
-  const openPnl = liveOpenPnl ?? health.totalUnrealised
-  const dayChange = health.totalRealised + openPnl
+  const liveEquity = livePaperEquity(account, prices)
+  const liveOpenPnl = liveUnrealised(account?.positions ?? [], prices)
+  const openPnl = liveOpenPnl ?? account?.unrealized ?? null
+  const unrealised = account?.unrealized ?? null
+  const realized = account?.realized ?? null
+  const dayChange = realized !== null && openPnl !== null ? realized + openPnl : null
 
   return (
     <div
@@ -100,9 +123,9 @@ export default function OverviewPage() {
             </span>
             <span className="period">.</span>
           </h1>
-          <p className="intro-copy">{introFor(now, snapshot.positions.length > 0)}</p>
+          <p className="intro-copy">{introFor(now, (account?.positions.length ?? 0) > 0)}</p>
         </div>
-        <button className="ghost-button" type="button" onClick={() => downloadReport(snapshot)}>
+        <button className="ghost-button" type="button" onClick={() => downloadReport(account)}>
           <span>Export report</span>
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 4v11M8 11l4 4 4-4M5 19h14" />
@@ -110,15 +133,17 @@ export default function OverviewPage() {
         </button>
       </section>
 
-      {snapshot.stale && <StaleNote />}
+      <TwoAccountsNote />
+
+      {snapshot.account.stale && <StaleNote />}
 
       <section className="control-strip" aria-label="Quick actions">
         <div className="control-strip-intro">
-          <span className="card-label">Control center</span>
+          <span className="card-label">{ACCOUNT_LABEL}</span>
           <strong>
-            {snapshot.positions.length === 0
-              ? 'No open positions. Your capital is untouched.'
-              : `${snapshot.positions.length} open position${snapshot.positions.length === 1 ? '' : 's'}, marked to market${isLive ? ' live' : ''}.`}
+            {(account?.positions.length ?? 0) === 0
+              ? 'No open virtual positions. Your virtual capital is untouched.'
+              : `${account?.positions.length} virtual position${account?.positions.length === 1 ? '' : 's'}, marked to market${isLive ? ' live' : ''}.`}
           </strong>
         </div>
         <div className="control-actions">
@@ -130,19 +155,20 @@ export default function OverviewPage() {
           </Link>
           <a
             className="control-button command-button"
-            href="/api/v1/orderbook"
+            href="/dashboard"
             target="_blank"
             rel="noreferrer"
+            title={SANDBOX_LABEL}
           >
-            <span>⌘</span> Raw API
+            <span>⌘</span> Testnet sandbox
           </a>
         </div>
       </section>
 
-      <section className="overview-grid" aria-label="Account overview">
+      <section className="overview-grid" aria-label="Virtual account overview">
         <article className="balance-card surface-card">
           <div className="card-topline">
-            <span className="card-label">Total balance</span>
+            <span className="card-label">Virtual equity</span>
             {isLive ? (
               <span className="live-label">
                 <span className="live-dot" /> Live
@@ -150,16 +176,18 @@ export default function OverviewPage() {
             ) : null}
           </div>
           <div className="balance-value">
-            {totalBalance === null ? '—' : money(totalBalance).replace(/\.\d+$/, '')}
+            {liveEquity === null ? NOT_REPORTED : money(liveEquity).replace(/\.\d+$/, '')}
           </div>
           <div className="balance-change">
-            <span className="change-symbol">{dayChange > 0 ? '↗' : dayChange < 0 ? '↘' : '→'}</span>
-            <strong>{signedMoney(dayChange)}</strong>
-            <span>realised plus unrealised</span>
+            <span className="change-symbol">
+              {dayChange === null ? '→' : dayChange > 0 ? '↗' : dayChange < 0 ? '↘' : '→'}
+            </span>
+            <strong>{dayChange === null ? NOT_REPORTED : signedMoney(dayChange)}</strong>
+            <span>realized plus unrealized</span>
             <span className="change-period">All time</span>
           </div>
           <div className="balance-footer">
-            <UpdatedAt at={snapshot.updatedAt} />
+            <UpdatedAt at={snapshot.account.updatedAt} />
             {lastSevenDays.length > 0 ? (
               <span className="mini-chart" aria-hidden="true">
                 {lastSevenDays.map((value) => (
@@ -178,32 +206,40 @@ export default function OverviewPage() {
         </article>
 
         <article className="metric-card surface-card">
-          <div className="card-label">Trading power</div>
-          <div className="metric-value">{amounts ? money(amounts.tradable) : '—'}</div>
+          <div className="card-label">Virtual cash</div>
+          <div className="metric-value">{read(account?.cash ?? null, money)}</div>
           <div className="metric-foot">
-            <span>Available for new orders</span>
+            <span>Available for the next order</span>
             <span className="metric-glyph">↗</span>
           </div>
         </article>
 
         <article className="metric-card surface-card">
-          <div className="card-label">Protected</div>
-          <div className="metric-value">{amounts ? money(amounts.savings) : '—'}</div>
+          <div className="card-label">Fees charged</div>
+          <div className="metric-value">{read(account?.fees ?? null, money)}</div>
           <div className="metric-foot">
-            <span>Savings floor, untouchable</span>
+            <span>Taken on every simulated fill</span>
             <span className="metric-glyph">→</span>
           </div>
         </article>
 
         <article className="metric-card surface-card risk-card">
-          <div className="card-label">Exposure</div>
+          <div className="card-label">Open exposure</div>
           <div className="metric-value risk-value">
             <span className="risk-ring" />
-            {health.exposureShare > 0 ? percent(health.exposureShare) : 'Flat'}
+            {account?.exposureShare === null || account?.exposureShare === undefined
+              ? NOT_REPORTED
+              : account.exposureShare > 0
+                ? percent(account.exposureShare)
+                : 'Flat'}
           </div>
           <div className="metric-foot">
             <span>
-              {health.exposureShare > 0 ? 'Of equity is in open positions' : 'No capital at risk'}
+              {account && account.positions.length === 0
+                ? 'No capital is at risk'
+                : account
+                  ? 'Of equity sits in open virtual positions'
+                  : NOT_REPORTED}
             </span>
             <span className="metric-glyph">→</span>
           </div>
@@ -213,10 +249,9 @@ export default function OverviewPage() {
       <section className="primary-grid">
         <article className="chart-card surface-card">
           <PortfolioChart
-            liveEquityNow={liveTotal}
-            fills={fills}
-            openPositions={snapshot.positions.length}
-            floor={amounts?.floor ?? 0}
+            series={series}
+            equity={liveEquity}
+            startingCash={account?.startingCash ?? null}
             range={range}
             onRangeChange={setRange}
           />
@@ -251,16 +286,14 @@ export default function OverviewPage() {
             <span>Not connected</span>
           </div>
           <p className="ai-description">
-            The agent is not running against this account. It is being wired up; until then it
-            places nothing.
+            The agent is not running against this account. The paper worker is what places its
+            orders, and until the agent is wired up every trade is that worker's own.
           </p>
           <div className="ai-stats">
             <div>
               <span>Last action</span>
-              <strong>{fills.length > 0 ? `${fills.length} fills on record` : 'None'}</strong>
-              <small>
-                {fills.length > 0 ? 'Placed manually, not by the agent' : 'No orders yet'}
-              </small>
+              <strong>{fills.length > 0 ? `${fills.length} virtual fills` : 'None'}</strong>
+              <small>{fills.length > 0 ? 'Placed by the paper worker' : 'No orders yet'}</small>
             </div>
             <div>
               <span>Next review</span>
@@ -289,19 +322,20 @@ export default function OverviewPage() {
         <article className="positions-card surface-card">
           <div className="section-heading compact-heading">
             <div>
-              <span className="card-label">Your assets</span>
+              <span className="card-label">Your virtual assets</span>
               <h2>
-                Open positions <span className="heading-count">{snapshot.positions.length}</span>
+                Open positions{' '}
+                <span className="heading-count">{account?.positions.length ?? 0}</span>
               </h2>
             </div>
             <Link className="text-button" to="/transactions">
               Activity <span>→</span>
             </Link>
           </div>
-          {snapshot.positions.length === 0 ? (
+          {(account?.positions.length ?? 0) === 0 ? (
             <EmptyNote
-              title="No open positions"
-              detail="Nothing is exposed to the market right now. Fills you make will appear here."
+              title={account?.virgin ? VIRGIN_POSITIONS_TITLE : 'No open virtual positions'}
+              detail={account?.virgin ? VIRGIN_POSITIONS_DETAIL : 'Nothing is exposed right now.'}
             />
           ) : (
             <div className="table-wrap">
@@ -311,25 +345,14 @@ export default function OverviewPage() {
                     <th>Asset</th>
                     <th>Position</th>
                     <th>Avg. price</th>
-                    <th>Current value</th>
+                    <th>Mark</th>
                     <th>Return</th>
                     <th />
                   </tr>
                 </thead>
                 <tbody>
-                  {snapshot.positions.map((position) => {
-                    const mark = prices.get(position.symbol)
-                    const live = mark ?? position.ltp ?? position.average_price
-                    const value = Math.abs(position.quantity) * live
-                    const pnl =
-                      typeof mark === 'number'
-                        ? (mark - position.average_price) * position.quantity
-                        : position.pnl
-                    const basis = Math.abs(position.average_price * position.quantity)
-                    const pnlPercent =
-                      typeof mark === 'number' && basis > 0
-                        ? (pnl / basis) * 100
-                        : position.pnlpercent
+                  {(account?.positions ?? []).map((position) => {
+                    const marked = markPosition(position, prices)
                     return (
                       <tr key={position.symbol}>
                         <td>
@@ -337,17 +360,20 @@ export default function OverviewPage() {
                         </td>
                         <td>
                           <strong>
-                            {qty(Math.abs(position.quantity))} {baseAsset(position.symbol)}
+                            {qty(position.qty)} {baseAsset(position.symbol)}
                           </strong>
                           <small className="muted-line">
-                            {position.quantity < 0 ? 'Short' : 'Long'}
+                            {String(position.side).toUpperCase() === 'SELL' ? 'Short' : 'Long'}
                           </small>
                         </td>
-                        <td>{money(position.average_price)}</td>
-                        <td>{money(value)}</td>
+                        <td>{money(position.entry)}</td>
                         <td>
-                          <strong>{percent(pnlPercent)}</strong>
-                          <small className="muted-line">{signedMoney(pnl)}</small>
+                          {money(marked.ltp)}
+                          {marked.isLive ? null : <small className="muted-line"> last known</small>}
+                        </td>
+                        <td>
+                          <strong>{read(marked.pnlPercent, percent)}</strong>
+                          <small className="muted-line">{signedMoney(marked.pnl)}</small>
                         </td>
                         <td />
                       </tr>
@@ -363,17 +389,14 @@ export default function OverviewPage() {
           <div className="section-heading compact-heading">
             <div>
               <span className="card-label">The paper trail</span>
-              <h2>Recent fills</h2>
+              <h2>Recent virtual fills</h2>
             </div>
             <Link className="text-button" to="/transactions">
               View all <span>→</span>
             </Link>
           </div>
           {fills.length === 0 ? (
-            <EmptyNote
-              title="No fills yet"
-              detail="Every executed order shows up here with its size, price and result."
-            />
+            <EmptyNote title={VIRGIN_TITLE} detail={VIRGIN_DETAIL} />
           ) : (
             <div className="activity-list">
               {fills.slice(0, 6).map((fill) => (
@@ -397,25 +420,25 @@ export default function OverviewPage() {
         </article>
       </section>
 
-      <section className="feature-grid" aria-label="Guardrails, markets and status">
+      <section className="feature-grid" aria-label="Account record, engine and status">
         <article className="feature-card surface-card decision-card">
           <div className="section-heading compact-heading">
             <div>
-              <span className="card-label">Your rules</span>
-              <h2>Guardrails</h2>
+              <span className="card-label">Your account</span>
+              <h2>Capital</h2>
             </div>
             <Link className="text-button" to="/manage">
               Review <span>→</span>
             </Link>
           </div>
-          <CapitalSplit />
+          <CapitalSplit account={account} />
         </article>
 
         <article className="feature-card surface-card signals-card">
           <div className="section-heading compact-heading">
             <div>
               <span className="card-label">What matters</span>
-              <h2>Portfolio record</h2>
+              <h2>Account record</h2>
             </div>
             {isLive ? (
               <span className="live-label">
@@ -423,57 +446,50 @@ export default function OverviewPage() {
               </span>
             ) : null}
           </div>
-          <PortfolioFacts
-            fills={fills}
-            byDay={realisedByDay}
-            capitalAtRisk={health.exposureShare}
-            equity={liveTotal}
-            floor={amounts?.floor ?? null}
-            tradable={amounts?.tradable ?? null}
-          />
+          {account ? <PortfolioFacts account={account} /> : <LoadingNote />}
           <div className="signal-list">
             <div className="signal-row">
-              <span>Tradable share</span>
+              <span>Cash share</span>
+              <strong>{read(account?.cashShare ?? null, (n) => `${n.toFixed(1)}%`)}</strong>
+              <span className="signal-meter">
+                <i style={{ width: `${clamp(account?.cashShare ?? null)}%` }} />
+              </span>
+            </div>
+            <div className="signal-row">
+              <span>Open exposure</span>
               <strong>
-                {amounts && amounts.equity > 0 ? `${health.cashShare.toFixed(1)}%` : '—'}
+                {account?.exposureShare === null || account?.exposureShare === undefined
+                  ? NOT_REPORTED
+                  : account.exposureShare > 0
+                    ? percent(account.exposureShare)
+                    : 'Flat'}
               </strong>
               <span className="signal-meter">
-                <i style={{ width: `${Math.min(100, Math.max(0, health.cashShare))}%` }} />
+                <i style={{ width: `${clamp(account?.exposureShare ?? null)}%` }} />
               </span>
             </div>
             <div className="signal-row">
-              <span>Exposure</span>
-              <strong>{health.exposureShare > 0 ? percent(health.exposureShare) : 'Flat'}</strong>
+              <span>Unrealized P&amp;L</span>
+              <strong>{read(unrealised, signedMoney)}</strong>
               <span className="signal-meter">
-                <i style={{ width: `${Math.min(100, Math.max(0, health.exposureShare))}%` }} />
+                <i style={{ width: `${clamp(Math.abs(unrealised ?? 0))}%` }} />
               </span>
             </div>
             <div className="signal-row">
-              <span>Unrealised P&amp;L</span>
-              <strong>{signedMoney(openPnl)}</strong>
+              <span>Realized P&amp;L</span>
+              <strong>{read(realized, signedMoney)}</strong>
               <span className="signal-meter">
-                <i style={{ width: `${Math.min(100, Math.abs(openPnl))}%` }} />
-              </span>
-            </div>
-            <div className="signal-row">
-              <span>Realised P&amp;L</span>
-              <strong>{signedMoney(health.totalRealised)}</strong>
-              <span className="signal-meter">
-                <i style={{ width: `${Math.min(100, Math.abs(health.totalRealised))}%` }} />
+                <i style={{ width: `${clamp(Math.abs(realized ?? 0))}%` }} />
               </span>
             </div>
           </div>
           <div className="planned-action">
             <span className="card-label">Best / worst open position</span>
-            <strong>
-              {health.best
-                ? `${health.best.symbol} ${percent(health.best.pnlPercent)}`
-                : 'No positions'}
-            </strong>
+            <strong>{extremes(account)}</strong>
             <small>
-              {health.worst
-                ? `Weakest is ${health.worst.symbol} at ${percent(health.worst.pnlPercent)}.`
-                : 'Nothing to rank until a position is open.'}
+              {(account?.positions.length ?? 0) === 0
+                ? 'Nothing to rank until the worker opens a position.'
+                : 'Ranked on the paper ledger marks.'}
             </small>
           </div>
         </article>
@@ -481,45 +497,11 @@ export default function OverviewPage() {
         <article className="feature-card surface-card wallet-feature-card">
           <div className="section-heading compact-heading">
             <div>
-              <span className="card-label">Where the money sits</span>
+              <span className="card-label">Where it sits</span>
               <h2>Allocation</h2>
             </div>
           </div>
-          {slices.length === 0 ? (
-            <EmptyNote
-              title="Nothing to allocate yet"
-              detail="Once the exchange reports balances, the split appears here."
-            />
-          ) : (
-            <div className="allocation-bars">
-              {slices.map((slice) => (
-                <div key={slice.label}>
-                  <span>
-                    {slice.label} <strong>{slice.share.toFixed(1)}%</strong>
-                  </span>
-                  <i>
-                    <b style={{ width: `${Math.min(100, Math.max(0, slice.share))}%` }} />
-                  </i>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="winners-row">
-            <div>
-              <span className="card-label">Best open</span>
-              <strong>
-                {health.best ? `${health.best.asset} ` : '— '}
-                {health.best ? <em>{percent(health.best.pnlPercent)}</em> : null}
-              </strong>
-            </div>
-            <div>
-              <span className="card-label">Needs attention</span>
-              <strong>
-                {health.worst ? `${health.worst.asset} ` : '— '}
-                {health.worst ? <em>{percent(health.worst.pnlPercent)}</em> : null}
-              </strong>
-            </div>
-          </div>
+          <AllocationBars account={account} />
         </article>
 
         <article className="feature-card surface-card calendar-card">
@@ -529,27 +511,27 @@ export default function OverviewPage() {
               <h2>P&amp;L calendar</h2>
             </div>
           </div>
-          <PnlCalendar byDay={realisedByDay} />
+          <PnlCalendar byDay={byDay} />
         </article>
 
         <article className="feature-card surface-card insights-card">
           <div className="section-heading compact-heading">
             <div>
-              <span className="card-label">Realised results</span>
+              <span className="card-label">Realized results</span>
               <h2>P&amp;L by day</h2>
             </div>
             <Link className="text-button" to="/transactions">
               Ledger <span>→</span>
             </Link>
           </div>
-          {realisedByDay.size === 0 ? (
+          {byDay.size === 0 ? (
             <EmptyNote
-              title="No realised P&L yet"
-              detail="Days appear here once a position has been closed at a profit or loss."
+              title="No realized P&L recorded yet"
+              detail="The ledger stores realized as a running total, so a day appears once a cycle moved it."
             />
           ) : (
             <div className="full-ledger">
-              {[...realisedByDay.entries()]
+              {[...byDay.entries()]
                 .sort((a, b) => b[0].localeCompare(a[0]))
                 .slice(0, 7)
                 .map(([day, value]) => (
@@ -563,7 +545,7 @@ export default function OverviewPage() {
                         })}
                       </strong>
                     </span>
-                    <span>Realised</span>
+                    <span>Realized</span>
                     <strong>{signedMoney(value)}</strong>
                     <time />
                   </div>
@@ -583,7 +565,7 @@ export default function OverviewPage() {
           {notices.length === 0 ? (
             <EmptyNote
               title="Nothing needs you"
-              detail="Notices appear when trading power runs low, figures go stale, or margin is committed."
+              detail="Notices appear when the ledger goes stale, the account falls from its peak, or the worker reports a problem."
             />
           ) : (
             <div className="alert-list">
@@ -623,6 +605,20 @@ export default function OverviewPage() {
         ) : null}
       </section>
 
+      {/* The sandbox is a different account, so it is a different section. It
+          sits outside the account grid rather than as another card in it, and
+          the heading carries its label in full so the distinction is visible
+          before a single figure is read. */}
+      <section className="pp-sandbox-section">
+        <div className="section-heading compact-heading">
+          <div>
+            <span className="card-label">A different account</span>
+            <h2>{SANDBOX_LABEL}</h2>
+          </div>
+        </div>
+        <SandboxPanel snapshot={snapshot} />
+      </section>
+
       <footer className="page-footer">
         <span>
           PranavPay <span className="footer-separator">·</span> Your money, in motion.
@@ -640,6 +636,17 @@ export default function OverviewPage() {
   )
 }
 
+/** A ledger figure, or the words for its absence. Never a zero. */
+function read(value: number | null, format: (n: number) => string): string {
+  return value === null ? NOT_REPORTED : format(value)
+}
+
+/** A share into 0-100 for a meter. Null and negative both render no bar. */
+function clamp(value: number | null): number {
+  if (value === null || !Number.isFinite(value)) return 0
+  return Math.min(100, Math.max(0, value))
+}
+
 function AssetName({ symbol }: { symbol: string }) {
   const asset = baseAsset(symbol)
   return (
@@ -654,35 +661,105 @@ function AssetName({ symbol }: { symbol: string }) {
 }
 
 /**
- * A plain-text statement of the account as it currently reads. Built from the
- * same snapshot the page shows, so the file and the screen cannot disagree.
+ * Best and worst open virtual position by percent, from the ledger's own marks.
+ * Both are absent when the account holds nothing.
  */
-function downloadReport(snapshot: ReturnType<typeof useSnapshot>) {
-  const amounts = toAmounts(snapshot.funds)
+function extremes(account: PaperAccount | null): string {
+  if (!account || account.positions.length === 0) return 'No positions'
+  const ranked = account.positions
+    .map((position) => ({ position, marked: markPosition(position, new Map()) }))
+    .filter((row) => row.marked.pnlPercent !== null)
+    .sort((a, b) => (b.marked.pnlPercent ?? 0) - (a.marked.pnlPercent ?? 0))
+  const best = ranked[0]
+  const worst = ranked.length > 1 ? ranked[ranked.length - 1] : null
+  const head = best
+    ? `${best.position.symbol} ${percent(best.marked.pnlPercent ?? 0)}`
+    : 'Not reported'
+  return worst ? `${head} · worst ${worst.position.symbol}` : head
+}
+
+/** Cash, open positions and unrealized P&L as shares of the virtual equity. */
+function AllocationBars({ account }: { account: PaperAccount | null }) {
+  if (!account || account.virgin) {
+    return (
+      <EmptyNote
+        title="Nothing to allocate yet"
+        detail={`Once the paper worker has run, the split between cash, open positions and unrealized P&L appears here. Start it with ${PAPER_COMMAND}.`}
+      />
+    )
+  }
+  const equity = account.equity
+  const slices: Array<{ label: string; value: number | null }> = [
+    { label: 'Virtual cash', value: account.cash },
+    { label: 'Open positions', value: account.openPositionValue },
+    {
+      label: 'Unrealized P&L',
+      value: account.unrealized === null ? null : Math.abs(account.unrealized),
+    },
+  ]
+  // A share of nothing is unknown, so a slice with no equity behind it shows
+  // its own dollar value and no percentage rather than a fabricated 0%.
+  const shareOf = (value: number | null): number | null =>
+    value === null || equity === null || equity <= 0 ? null : (value / equity) * 100
+
+  return (
+    <div className="allocation-bars">
+      {slices.map((slice) => {
+        const share = shareOf(slice.value)
+        return (
+          <div key={slice.label}>
+            <span>
+              {slice.label} <strong>{read(share, (n) => `${n.toFixed(1)}%`)}</strong>
+            </span>
+            <i>
+              <b style={{ width: `${clamp(share)}%` }} />
+            </i>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * A plain-text statement of the virtual account as it currently reads. Built
+ * from the same ledger the page shows, so the file and the screen cannot
+ * disagree.
+ */
+function downloadReport(account: PaperAccount | null) {
   const lines = [
-    'PRANAVPAY ACCOUNT REPORT',
+    'PRANAVPAY VIRTUAL ACCOUNT REPORT',
     `Generated ${new Date().toLocaleString()}`,
     '',
-    `Equity            ${amounts ? money(amounts.equity) : 'unavailable'}`,
-    `Protected savings ${amounts ? money(amounts.savings) : 'unavailable'}`,
-    `Tradable now      ${amounts ? money(amounts.tradable) : 'unavailable'}`,
-    `Margin committed  ${amounts ? money(amounts.marginLocked) : 'unavailable'}`,
-    `Realised P&L      ${amounts ? signedMoney(amounts.realised) : 'unavailable'}`,
-    `Unrealised P&L    ${amounts ? signedMoney(amounts.unrealised) : 'unavailable'}`,
+    'Virtual money. Not deposited anywhere and not withdrawable.',
     '',
-    `Open positions (${snapshot.positions.length})`,
-    ...snapshot.positions.map(
+    `Equity                 ${read(account?.equity ?? null, money)}`,
+    `Virtual cash           ${read(account?.cash ?? null, money)}`,
+    `Realized P&L           ${read(account?.realized ?? null, signedMoney)}`,
+    `Unrealized P&L         ${read(account?.unrealized ?? null, signedMoney)}`,
+    `Fees charged           ${read(account?.fees ?? null, money)}`,
+    `Starting capital       ${read(account?.startingCash ?? null, money)}`,
+    `Peak equity            ${read(account?.peakEquity ?? null, money)}`,
+    `Drawdown from peak     ${read(account?.drawdown ?? null, percent)}`,
+    `Margin locked (shorts) ${read(account?.shortMarginLocked ?? null, money)}`,
+    `Open position value    ${read(account?.openPositionValue ?? null, money)}`,
+    '',
+    `Open virtual positions (${account?.positions.length ?? 0})`,
+    ...(account?.positions ?? []).map(
       (position) =>
-        `  ${position.symbol}  qty ${position.quantity}  avg ${position.average_price}  ltp ${position.ltp}`
+        `  ${position.symbol}  ${position.side} ${position.qty}  entry ${position.entry}  mark ${position.mark}`
     ),
     '',
-    `Venue ${snapshot.funds?.is_live ? 'Binance live exchange' : 'Binance testnet'}`,
+    `Worker: ${account?.worker?.status ?? NOT_REPORTED} (cycle ${account?.worker?.cycle ?? NOT_REPORTED})`,
+    '',
+    `The OpenAlgo terminal is a separate Binance ${SANDBOX_LABEL},`,
+    'and none of its balances appear in this report.',
   ]
   const blob = new Blob([lines.join('\n')], { type: 'text/plain' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = `pranavpay-report-${new Date().toISOString().slice(0, 10)}.txt`
+  link.download = `pranavpay-virtual-account-${new Date().toISOString().slice(0, 10)}.txt`
   link.click()
   // Revoking immediately can cancel the download in Safari; defer a tick.
   setTimeout(() => URL.revokeObjectURL(url), 1000)

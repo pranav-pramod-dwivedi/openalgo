@@ -25,6 +25,13 @@ Keys owned by this module:
     with a negative net P&L regardless of what is configured.
 ``monitor_seconds`` / ``research_seconds``
     The two cadences.
+``analyst_outage_cycles``
+    How many consecutive planner cycles may end with the analyst not answering
+    before the worker stops waiting for one. The analyst is still asked first on
+    every cycle -- this is the count at which the worker stops refusing, not a
+    licence to stop asking. Once the count is reached the cycle may trade on
+    rules alone and every trade it places is stamped unreviewed; the moment the
+    analyst answers again the worker goes back to reviewed trading by itself.
 ``worker_health``
     A JSON snapshot the worker rewrites every cycle and ``--status`` reads.
 """
@@ -47,6 +54,7 @@ KEY_MIN_NET_PNL = "min_net_pnl"
 KEY_MAX_DRAWDOWN_PCT = "max_drawdown_pct"
 KEY_MONITOR = "monitor_seconds"
 KEY_RESEARCH = "research_seconds"
+KEY_ANALYST_OUTAGE_CYCLES = "analyst_outage_cycles"
 KEY_HEALTH = "worker_health"
 
 # Liquid Binance pairs with real 1m/5m history. Chosen for depth and history, not
@@ -71,6 +79,18 @@ DEFAULT_RESEARCH_INTERVALS = ["5m", "15m", "1h"]
 DEFAULT_RESEARCH_MAX_EXPERIMENTS = 300
 DEFAULT_MONITOR_SECONDS = 60
 DEFAULT_RESEARCH_SECONDS = 300
+
+# How many cycles in a row may end with the analyst not answering before the
+# worker stops refusing outright. Three is enough to tell a free-tier cap (which
+# lasts for hours) from a single dropped call, and short enough that an operator
+# watching an account does not sit through three empty minutes first.
+#
+# One is allowed because an operator who wants unreviewed trading immediately is
+# entitled to it; the analyst is still asked on every cycle either way, so the
+# only thing this number changes is how many refused cycles come first.
+DEFAULT_ANALYST_OUTAGE_CYCLES = 3
+MIN_ANALYST_OUTAGE_CYCLES = 1
+MAX_ANALYST_OUTAGE_CYCLES = 100
 
 # The validation bar. Trades 2 rather than 3, so a setup that fires twice is
 # still evidence, but a net loss of any size is never a candidate: a losing
@@ -98,6 +118,7 @@ DEFAULTS = {
     KEY_MAX_DRAWDOWN_PCT: DEFAULT_MAX_DRAWDOWN_PCT,
     KEY_MONITOR: DEFAULT_MONITOR_SECONDS,
     KEY_RESEARCH: DEFAULT_RESEARCH_SECONDS,
+    KEY_ANALYST_OUTAGE_CYCLES: DEFAULT_ANALYST_OUTAGE_CYCLES,
 }
 
 
@@ -178,6 +199,7 @@ class PaperConfig:
     max_drawdown_pct: float
     monitor_seconds: int
     research_seconds: int
+    analyst_outage_cycles: int
 
     @property
     def symbols_csv(self) -> str:
@@ -207,6 +229,7 @@ class PaperConfig:
             KEY_MAX_DRAWDOWN_PCT: self.max_drawdown_pct,
             KEY_MONITOR: self.monitor_seconds,
             KEY_RESEARCH: self.research_seconds,
+            KEY_ANALYST_OUTAGE_CYCLES: self.analyst_outage_cycles,
         }
 
 
@@ -250,6 +273,12 @@ def load() -> PaperConfig:
         ),
         monitor_seconds=monitor,
         research_seconds=research,
+        analyst_outage_cycles=_normalize_bounded_int(
+            db.get(KEY_ANALYST_OUTAGE_CYCLES, DEFAULTS[KEY_ANALYST_OUTAGE_CYCLES]),
+            DEFAULT_ANALYST_OUTAGE_CYCLES,
+            MIN_ANALYST_OUTAGE_CYCLES,
+            MAX_ANALYST_OUTAGE_CYCLES,
+        ),
     )
 
 
@@ -264,6 +293,7 @@ def persist(
     max_drawdown_pct=None,
     monitor_seconds=None,
     research_seconds=None,
+    analyst_outage_cycles=None,
 ) -> PaperConfig:
     """Write only the values that were explicitly supplied, then re-read."""
     if symbols is not None:
@@ -301,6 +331,16 @@ def persist(
         db.setc(KEY_MONITOR, _normalize_seconds(monitor_seconds, DEFAULT_MONITOR_SECONDS))
     if research_seconds is not None:
         db.setc(KEY_RESEARCH, _normalize_seconds(research_seconds, DEFAULT_RESEARCH_SECONDS))
+    if analyst_outage_cycles is not None:
+        db.setc(
+            KEY_ANALYST_OUTAGE_CYCLES,
+            _normalize_bounded_int(
+                analyst_outage_cycles,
+                DEFAULT_ANALYST_OUTAGE_CYCLES,
+                MIN_ANALYST_OUTAGE_CYCLES,
+                MAX_ANALYST_OUTAGE_CYCLES,
+            ),
+        )
     return load()
 
 

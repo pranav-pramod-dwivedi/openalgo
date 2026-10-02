@@ -2,34 +2,28 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi } from '@/api/trading'
 import { useMarketData } from '@/hooks/useMarketData'
 import { useAuthStore } from '@/stores/authStore'
-import type { Position } from '@/types/trading'
+import type { PaperAccount } from './account'
 import { baseAsset } from './derive'
-import type { WalletSnapshot } from './useWalletSnapshot'
+import type { PaperPosition } from './usePaperState'
 
 const POLL_MS = 10_000
 
-/** The markets worth streaming: held positions, then what is held in spot. */
-export function useWatchedMarkets(snapshot: {
-  positions: Position[]
-  funds: { spot_balances?: Array<{ asset?: string }> } | null
-}): string[] {
+/**
+ * The markets worth streaming: whatever the virtual account is exposed to.
+ *
+ * Only open paper positions count. The Binance spot balances are a sandbox's
+ * holdings and were what used to put unrelated coins on a panel headed "What you
+ * hold", which is an account figure by another name.
+ */
+export function useWatchedMarkets(account: PaperAccount | null): string[] {
   return useMemo(() => {
     const unique = new Set<string>()
-    for (const position of snapshot.positions) unique.add(position.symbol)
-    for (const balance of snapshot.funds?.spot_balances ?? []) {
-      const asset = balance.asset?.toUpperCase()
-      // A stablecoin is not a market: USDT would become "USDTUSDT" and ask the
-      // exchange for a pair that does not exist.
-      if (!asset || STABLES.has(asset)) continue
-      unique.add(`${asset}USDT`)
-    }
-    // No fallback symbol: this list is labelled "What you hold", so an
-    // account holding nothing must return nothing rather than borrow BTC.
+    for (const position of account?.positions ?? []) unique.add(position.symbol)
+    // No fallback symbol: this list is labelled "What you hold", so an account
+    // holding nothing must return nothing rather than borrow BTC.
     return [...unique].filter((symbol) => /^[A-Z0-9]{4,20}$/.test(symbol)).slice(0, 12)
-  }, [snapshot.positions, snapshot.funds])
+  }, [account?.positions])
 }
-
-const STABLES = new Set(['USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD', 'USDP', 'DAI'])
 
 export interface LiveMarks {
   prices: Map<string, number>
@@ -41,26 +35,23 @@ export interface LiveMarks {
 }
 
 /**
- * Live marks for whatever this account is actually exposed to.
+ * Live marks for the symbols the virtual account is exposed to.
  *
- * The snapshot on its own is a 30-second poll, so a position sat frozen behind
- * a page that looked live. Two sources feed this, in the order the OpenAlgo
- * Positions page already uses:
+ * The ledger is a 15-second poll, so a position sat frozen behind a page that
+ * looked live. Two sources feed this, in the order the OpenAlgo Positions page
+ * already uses:
  *
  *   1. the shared WebSocket feed, when this broker is streaming;
  *   2. the MultiQuotes REST endpoint, which keeps prices moving when it is not.
  *
- * It annotates the snapshot rather than mutating it: one poll owns the books,
+ * It annotates the ledger rather than mutating it: one fetch owns the books,
  * this only supplies marks, so the two can never fight over the same state.
  * `isStreaming` is reported separately from `isLive` so the interface can say
  * which one is actually happening instead of implying a stream it does not have.
  */
-export function useLiveMarks(snapshot: {
-  positions: Position[]
-  funds: { spot_balances?: Array<{ asset?: string }> } | null
-}): LiveMarks {
+export function useLiveMarks(account: PaperAccount | null): LiveMarks {
   const apiKey = useAuthStore((state) => state.apiKey)
-  const symbols = useWatchedMarkets(snapshot)
+  const symbols = useWatchedMarkets(account)
 
   const { data, isConnected } = useMarketData({
     symbols: symbols.map((symbol) => ({ symbol, exchange: 'CRYPTO' })),
@@ -81,7 +72,7 @@ export function useLiveMarks(snapshot: {
     }
   }, [])
 
-  // The symbol list is rebuilt on every poll of the snapshot, so depending on
+  // The symbol list is rebuilt on every poll of the ledger, so depending on
   // its identity would restart the interval continuously. symbolsKey is the
   // stable value that actually changes the request.
   // biome-ignore lint/correctness/useExhaustiveDependencies: symbolsKey stands in for symbols
@@ -90,7 +81,7 @@ export function useLiveMarks(snapshot: {
     let cancelled = false
 
     const pull = async () => {
-      // A hidden tab is not a reason to keep asking the exchange.
+      // A hidden tab is not a reason to keep asking.
       if (typeof document !== 'undefined' && document.hidden) return
       try {
         const response = await tradingApi.getMultiQuotes(
@@ -153,50 +144,62 @@ export function useLiveMarks(snapshot: {
 
 export interface MarkedPosition {
   ltp: number
-  value: number
+  /** Marked P&L, signed for the side the ledger recorded. */
   pnl: number
-  pnlPercent: number
+  pnlPercent: number | null
   isLive: boolean
 }
 
 /**
- * Recompute a position from the live mark, so the figures on screen are what a
- * close would produce right now rather than what the last poll said.
+ * Recompute one paper position from the live mark, so the figures on screen are
+ * what a close would produce right now rather than what the last poll said.
+ *
+ * `pnlPercent` is null when the position reports no entry price, because the
+ * ratio would divide by nothing.
  */
-export function markPosition(
-  position: { symbol: string; quantity: number; average_price: number; ltp?: number },
-  prices: Map<string, number>
-): MarkedPosition {
+export function markPosition(position: PaperPosition, prices: Map<string, number>): MarkedPosition {
   const live = prices.get(position.symbol)
-  const ltp = live ?? position.ltp ?? position.average_price
-  const value = Math.abs(position.quantity) * ltp
-  const pnl = (ltp - position.average_price) * position.quantity
-  const costBasis = Math.abs(position.average_price * position.quantity)
+  const mark = typeof live === 'number' ? live : position.mark
+  const entry = position.entry
+  const signedQty = String(position.side).toUpperCase() === 'SELL' ? -position.qty : position.qty
+  const basis = Math.abs(entry * signedQty)
+  const pnl = (mark - entry) * signedQty
   return {
-    ltp,
-    value,
+    ltp: mark,
     pnl,
-    pnlPercent: costBasis > 0 ? (pnl / costBasis) * 100 : 0,
+    pnlPercent: basis > 0 ? (pnl / basis) * 100 : null,
     isLive: typeof live === 'number',
   }
 }
 
-/** Equity restated with the live marks, for the headline balance. */
-export function liveEquity(snapshot: WalletSnapshot, prices: Map<string, number>): number | null {
-  const equity = Number.parseFloat(snapshot.funds?.equity_usd ?? '')
-  if (!Number.isFinite(equity)) return null
+/**
+ * The virtual account's equity restated with the live marks.
+ *
+ * The ledger's own equity is the starting point, so this only carries the move
+ * since it last read: the difference between a fresh mark and the mark the
+ * ledger stored, applied to the position's size. Null whenever the ledger has
+ * not reported equity, so a headline can never be built out of nothing.
+ */
+export function livePaperEquity(
+  account: PaperAccount | null,
+  prices: Map<string, number>
+): number | null {
+  if (!account || account.equity === null) return null
   let delta = 0
-  for (const position of snapshot.positions) {
+  for (const position of account.positions) {
     const live = prices.get(position.symbol)
-    if (typeof live !== 'number') continue
-    const previous = position.ltp || position.average_price
-    delta += (live - previous) * position.quantity
+    if (typeof live !== 'number' || typeof position.mark !== 'number') continue
+    const signedQty = String(position.side).toUpperCase() === 'SELL' ? -position.qty : position.qty
+    delta += (live - position.mark) * signedQty
   }
-  return equity + delta
+  return account.equity + delta
 }
 
-/** Unrealised P&L restated with the live marks. */
-export function liveUnrealised(positions: Position[], prices: Map<string, number>): number | null {
+/** Unrealised P&L restated with the live marks, or null when none are streaming. */
+export function liveUnrealised(
+  positions: PaperPosition[],
+  prices: Map<string, number>
+): number | null {
   if (positions.length === 0) return 0
   let total = 0
   let marked = 0
@@ -205,7 +208,7 @@ export function liveUnrealised(positions: Position[], prices: Map<string, number
     total += mark.pnl
     if (mark.isLive) marked += 1
   }
-  // With nothing streaming, the poll's own figure is the honest one.
+  // With nothing streaming, the ledger's own figure is the honest one.
   return marked > 0 ? total : null
 }
 

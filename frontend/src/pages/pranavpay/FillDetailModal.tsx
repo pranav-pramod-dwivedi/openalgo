@@ -12,10 +12,11 @@ interface FillDetailModalProps {
 }
 
 /**
- * The full story of one fill: every field the exchange reported about it,
- * plus that fill's share of the realised total. A modal rather than an
- * expanding row, so it reads the same on a phone as on a desktop - the
- * existing modal card already scrolls within small viewports.
+ * The full story of one virtual fill: every field the paper ledger stored about
+ * it, plus that fill's share of the realized total where the ledger reports
+ * both. A modal rather than an expanding row, so it reads the same on a phone
+ * as on a desktop - the existing modal card already scrolls within small
+ * viewports.
  */
 export default function FillDetailModal({ fill, totalRealised, onClose }: FillDetailModalProps) {
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -98,26 +99,42 @@ export default function FillDetailModal({ fill, totalRealised, onClose }: FillDe
               <strong>{money(fill.value)}</strong>
             </div>
             <div className="pp-facts-row">
-              <span>Realised P&amp;L</span>
-              <strong>{fill.pnl === null ? 'Still open' : signedMoney(fill.pnl)}</strong>
-              {fill.pnl === null ? (
-                <small>This fill has no realised result yet, so it contributes nothing.</small>
+              <span>Fee charged</span>
+              <strong>
+                {fill.fee === null || fill.fee === undefined ? 'Not reported' : money(fill.fee)}
+              </strong>
+              {fill.fee === null || fill.fee === undefined ? (
+                <small>The ledger stored no fee for this fill.</small>
               ) : null}
             </div>
             <div className="pp-facts-row">
-              <span>Share of realised total</span>
-              <strong>{share === null ? 'No share' : percent(share)}</strong>
-              {share === null ? (
+              <span>Slippage charged</span>
+              <strong>
+                {fill.slippage === null || fill.slippage === undefined
+                  ? 'Not reported'
+                  : money(fill.slippage)}
+              </strong>
+            </div>
+            <div className="pp-facts-row">
+              <span>Realized P&amp;L</span>
+              <strong>{fill.pnl === null ? 'Not reported' : signedMoney(fill.pnl)}</strong>
+              {fill.pnl === null ? (
                 <small>
-                  {fill.pnl === null
-                    ? 'Open fills sit outside the realised total.'
-                    : 'The realised total is zero, so a share would divide by nothing.'}
+                  The paper ledger keeps realized P&amp;L as one account total and stores none on a
+                  fill, so there is no per-fill figure to show.
                 </small>
               ) : null}
             </div>
             <div className="pp-facts-row">
-              <span>Product</span>
-              <strong>{fill.product}</strong>
+              <span>Share of realized total</span>
+              <strong>{share === null ? 'Not reported' : percent(share)}</strong>
+              {share === null ? (
+                <small>
+                  {fill.pnl === null
+                    ? 'This fill carries no realized result to divide.'
+                    : 'The realized total is zero, so a share would divide by nothing.'}
+                </small>
+              ) : null}
             </div>
             <div className="pp-facts-row">
               <span>Venue</span>
@@ -125,12 +142,15 @@ export default function FillDetailModal({ fill, totalRealised, onClose }: FillDe
             </div>
             <div className="pp-facts-row">
               <span>Order id</span>
-              <strong>{fill.raw.orderid || 'Not reported'}</strong>
+              <strong>{fill.orderId || 'Not reported'}</strong>
             </div>
             <div className="pp-facts-row">
               <span>Exact time</span>
               <strong title={fill.at ? fill.at.toISOString() : undefined}>
-                {exact ?? fill.raw.timestamp ?? 'Not reported'}
+                {exact ??
+                  (fill.timestamp === null
+                    ? 'Not reported'
+                    : new Date(fill.timestamp).toISOString())}
               </strong>
               {fill.at ? <small>{fill.at.toISOString()}</small> : null}
             </div>

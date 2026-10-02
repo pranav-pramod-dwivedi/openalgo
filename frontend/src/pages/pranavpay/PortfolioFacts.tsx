@@ -1,118 +1,95 @@
+import { NOT_REPORTED, type PaperAccount } from './account'
 import { EmptyNote } from './components'
-import { type FillRow, money, percent, portfolioStats, signedMoney } from './derive'
+import { money, percent, signedMoney } from './derive'
 
 /**
- * The portfolio in numbers.
+ * The virtual account's record, in the figures the paper ledger reports.
  *
- * Everything here is a count, a sum or a ratio of two real figures taken from
- * the fills. There is deliberately no composite score: a single "health" number
- * hides which of its inputs is bad, and the inputs are the part a trader acts
- * on.
+ * Everything here is read, not scored. There is deliberately no composite
+ * "health" number: a single score hides which of its inputs is bad, and the
+ * inputs are the part a trader acts on. A figure the engine did not store reads
+ * as "not reported" rather than as a zero.
  */
-export function PortfolioFacts({
-  fills,
-  byDay,
-  capitalAtRisk,
-  equity,
-  floor,
-  tradable,
-}: {
-  fills: FillRow[]
-  byDay: Map<string, number>
-  capitalAtRisk: number
-  equity: number | null
-  floor: number | null
-  tradable: number | null
-}) {
-  const stats = portfolioStats(fills, byDay, capitalAtRisk)
-
-  if (stats.closedFills === 0) {
+export function PortfolioFacts({ account }: { account: PaperAccount }) {
+  if (account.virgin) {
     return (
       <EmptyNote
-        title="No closed trades yet"
-        detail="Win rate, profit factor and averages appear once a position has been closed."
+        title="No virtual trades yet"
+        detail="The paper ledger is empty because the worker has not run. Start it with ./paper and every figure here fills itself in."
       />
     )
   }
 
-  const gainAboveFloor = equity !== null && floor !== null ? equity - floor : null
+  const openValue = account.openPositionValue
+  const unrealisedShare =
+    account.unrealized !== null && account.equity !== null && account.equity > 0
+      ? (Math.abs(account.unrealized) / account.equity) * 100
+      : null
 
   return (
     <div className="pp-facts">
       <div className="pp-facts-row">
-        <span>Win rate</span>
-        <strong>{stats.winRate.toFixed(0)}%</strong>
+        <span>Starting capital</span>
+        <strong>{read(account.startingCash, money)}</strong>
+        <small>What the ledger was seeded with, and it never changes</small>
+      </div>
+
+      <div className="pp-facts-row">
+        <span>Realized</span>
+        <strong>{read(account.realized, signedMoney)}</strong>
+        <small>Closed result since the ledger began</small>
+      </div>
+
+      <div className="pp-facts-row">
+        <span>Unrealized</span>
+        <strong>{read(account.unrealized, signedMoney)}</strong>
         <small>
-          {stats.wins} of {stats.closedFills} closed
+          {unrealisedShare === null
+            ? `${account.positions.length} open position${account.positions.length === 1 ? '' : 's'}`
+            : `${percent(unrealisedShare)} of equity across ${account.positions.length} open position${account.positions.length === 1 ? '' : 's'}`}
         </small>
       </div>
 
       <div className="pp-facts-row">
-        <span>Profit factor</span>
-        <strong>{stats.profitFactor === null ? '—' : stats.profitFactor.toFixed(2)}</strong>
-        <small>
-          {stats.profitFactor === null
-            ? 'No losing trades yet'
-            : `${money(stats.grossProfit)} won vs ${money(stats.grossLoss)} lost`}
-        </small>
+        <span>Fees charged</span>
+        <strong>{read(account.fees, money)}</strong>
+        <small>Taken on every simulated fill, and never refunded</small>
       </div>
 
       <div className="pp-facts-row">
-        <span>Average win / loss</span>
-        <strong>
-          {signedMoney(stats.averageWin)} / {signedMoney(-stats.averageLoss)}
-        </strong>
-        <small>
-          {stats.averageWin > 0 && stats.averageLoss > 0
-            ? `Wins are ${(stats.averageWin / stats.averageLoss).toFixed(2)}x losses`
-            : 'Only one side has closed so far'}
-        </small>
+        <span>Peak equity</span>
+        <strong>{read(account.peakEquity, money)}</strong>
+        <small>The best equity the ledger has recorded</small>
       </div>
 
       <div className="pp-facts-row">
-        <span>Largest win</span>
-        <strong>{stats.largestWin ? signedMoney(stats.largestWin.pnl) : '—'}</strong>
-        <small>
-          {stats.largestWin
-            ? `${stats.largestWin.asset} · ${stats.largestWin.quantity} @ ${money(stats.largestWin.price)}`
-            : '—'}
-        </small>
+        <span>Drawdown from peak</span>
+        <strong>{read(account.drawdown, percent)}</strong>
+        <small>How far the account sits below that peak</small>
       </div>
 
       <div className="pp-facts-row">
-        <span>Largest loss</span>
-        <strong>{stats.largestLoss ? signedMoney(stats.largestLoss.pnl) : '—'}</strong>
-        <small>
-          {stats.largestLoss
-            ? `${stats.largestLoss.asset} · ${stats.largestLoss.quantity} @ ${money(stats.largestLoss.price)}`
-            : 'Nothing has lost money'}
-        </small>
+        <span>Margin held against shorts</span>
+        <strong>{read(account.shortMarginLocked, money)}</strong>
+        <small>Posted against open short positions, so not spendable</small>
       </div>
 
       <div className="pp-facts-row">
-        <span>Trading days</span>
-        <strong>
-          {stats.daysGreen} / {stats.daysGreen + stats.daysRed}
-        </strong>
-        <small>
-          {stats.daysGreen + stats.daysRed === 0
-            ? 'No day closed yet'
-            : `${stats.daysGreen} up, ${stats.daysRed} down`}
-        </small>
+        <span>Open position value</span>
+        <strong>{read(openValue, money)}</strong>
+        <small>Sum of the marks the ledger reports</small>
       </div>
 
-      {gainAboveFloor !== null && (
-        <div className="pp-facts-row">
-          <span>Trading added</span>
-          <strong>{signedMoney(gainAboveFloor)}</strong>
-          <small>
-            Everything above the {money(floor)} savings floor
-            {tradable !== null && equity !== null && equity > 0
-              ? ` · ${percent((gainAboveFloor / equity) * 100)} of capital`
-              : ''}
-          </small>
-        </div>
-      )}
+      <div className="pp-facts-row">
+        <span>Traded value</span>
+        <strong>{read(account.tradedValue, money)}</strong>
+        <small>Across the fills the ledger returned</small>
+      </div>
     </div>
   )
+}
+
+/** The stored figure, or the words for its absence. */
+function read(value: number | null, format: (n: number) => string): string {
+  return value === null ? NOT_REPORTED : format(value)
 }

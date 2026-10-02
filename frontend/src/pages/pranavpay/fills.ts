@@ -3,6 +3,10 @@ import type { FillRow } from './derive'
 /**
  * Fills that actually closed something. Only these carry a realised result;
  * anything with a null P&L is still open and contributes nothing to the total.
+ *
+ * The paper ledger reports realised P&L as one account total rather than per
+ * fill, so its rows are all null here and every per-fill sum is legitimately
+ * empty rather than wrong.
  */
 export function closedFills(fills: FillRow[]): FillRow[] {
   return fills.filter((fill) => fill.pnl !== null)
@@ -51,6 +55,8 @@ const CSV_HEADERS = [
   'quantity',
   'avg_price',
   'trade_value',
+  'fee',
+  'slippage',
   'realised_pnl',
   'pnl_share_pct',
   'product',
@@ -63,9 +69,14 @@ function csvCell(value: string): string {
   return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
 }
 
+function cell(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : ''
+}
+
 /**
- * Every fill as CSV, with the same eleven fields the detail panel shows. All
- * values come from the fills themselves; nothing is invented for the export.
+ * Every fill as CSV, with the same fields the detail panel shows. All values
+ * come from the fills themselves; nothing is invented for the export, and a
+ * figure the source did not report is an empty cell rather than a zero.
  */
 export function fillsToCsv(fills: FillRow[], total: number): string {
   const lines = [CSV_HEADERS.join(',')]
@@ -78,12 +89,14 @@ export function fillsToCsv(fills: FillRow[], total: number): string {
         String(fill.quantity),
         String(fill.price),
         String(fill.value),
+        cell(fill.fee),
+        cell(fill.slippage),
         fill.pnl === null ? '' : String(fill.pnl),
         share === null ? '' : String(share),
         fill.product,
         fill.venue,
-        fill.raw.orderid ?? '',
-        fill.at ? fill.at.toISOString() : (fill.raw.timestamp ?? ''),
+        fill.orderId,
+        fill.timestamp === null ? '' : new Date(fill.timestamp).toISOString(),
       ]
         .map(csvCell)
         .join(',')

@@ -1,15 +1,13 @@
 import { useMemo } from 'react'
-import { EmptyNote, LoadingNote } from '../components'
+import { ACCOUNT_LABEL, NOT_REPORTED, SANDBOX_LABEL } from '../account'
+import { EmptyNote, LoadingNote, useSnapshot } from '../components'
 import { formatTime, money, percent, qty, relativeTime, signedMoney } from '../derive'
 import type { PaperPlan, PaperStrategy } from '../usePaperState'
-import { latestPlan, metricOf, parseMetrics, usePaperState } from '../usePaperState'
+import { latestPlan, metricOf, parseMetrics } from '../usePaperState'
 
 /** Epoch seconds from the engine, as a Date the formatters accept. */
 const at = (ts: number | null | undefined): Date | null =>
   typeof ts === 'number' && Number.isFinite(ts) ? new Date(ts * 1000) : null
-
-/** Shown wherever the engine stored nothing, so a blank never reads as a zero. */
-const NOT_REPORTED = 'not reported'
 
 /**
  * The three backtest figures the panel reads, each independently nullable.
@@ -68,15 +66,17 @@ function directionText(plan: PaperPlan): string {
 }
 
 /**
- * Paper trading.
+ * Paper trading: the engine behind the virtual account.
  *
- * A simulation engine, not a wallet. Nothing here moves real money, so the page
- * says that at the top rather than in a footnote, and every figure is read from
- * the engine's ledger — the exchange balance is a separate account and is never
- * mixed into these numbers.
+ * A simulation engine, not a wallet, and not the Binance sandbox. The figures
+ * here are the same ledger every other page reads as the user's account, shown
+ * with the engine's own detail: the planner's decisions, each strategy's
+ * backtest record and the worker's heartbeat. Nothing on this page is mixed with
+ * the {SANDBOX_LABEL} the OpenAlgo terminal runs on.
  */
 export default function PaperPage() {
-  const { state, loading, stale, error, updatedAt, refresh } = usePaperState()
+  const { account } = useSnapshot()
+  const { state, loading, stale, error, updatedAt, refresh } = account
 
   const activeStrategies = useMemo(
     () => (state?.strategies ?? []).filter((s) => s.status === 'active'),
@@ -173,19 +173,20 @@ export default function PaperPage() {
             Paper <span className="eyebrow-line" /> Simulation
           </p>
           <h1>
-            Practice money,
+            The engine behind
             <br />
-            <span className="period">real mechanics.</span>
+            <span className="period">your account.</span>
           </h1>
           <p className="intro-copy">
-            The engine below places simulated orders against live prices. No funds are deposited, no
-            exchange account is touched.
+            The paper worker places simulated orders against live prices. This is the ledger every
+            other PranavPay page reads as your account, shown with the engine's own detail.
           </p>
         </div>
       </section>
 
       <output className="pp-paper-banner">
-        PAPER TRADING — VIRTUAL MONEY. None of these balances exist on any exchange.
+        {ACCOUNT_LABEL.toUpperCase()} — VIRTUAL MONEY. None of these balances exist on any exchange,
+        and the {SANDBOX_LABEL} is a different account entirely.
       </output>
 
       {stale && (

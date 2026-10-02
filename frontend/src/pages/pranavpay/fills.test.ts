@@ -1,38 +1,32 @@
 import { describe, expect, it } from 'vitest'
-import type { Trade } from '@/types/trading'
 import type { FillRow } from './derive'
 import { contributionRows, fillShare, fillsCsvFilename, fillsToCsv, realisedTotal } from './fills'
 
-function trade(overrides: Partial<Trade> = {}): Trade {
-  return {
-    symbol: 'BTCUSDT',
-    exchange: 'BINANCE',
-    action: 'SELL',
-    quantity: 1,
-    average_price: 2,
-    trade_value: 2,
-    product: 'SPOT',
-    orderid: 'order-1',
-    timestamp: '2026-09-18 03:53:31',
-    ...overrides,
-  }
-}
-
+/**
+ * A ledger row as the paper engine produces one.
+ *
+ * `pnl` is null for every row here unless a test asks for otherwise, because
+ * that is the truth of the paper ledger: it reports realized P&L as one account
+ * total and stores none on an individual fill. A fixture that gave fills a
+ * realized result would assert a breakdown the engine never produces.
+ */
 function fill(id: string, pnl: number | null, overrides: Partial<FillRow> = {}): FillRow {
-  const raw = trade()
   return {
     id,
-    symbol: raw.symbol,
+    symbol: 'BTCUSDT',
     asset: 'BTC',
-    action: raw.action,
-    quantity: raw.quantity,
-    price: raw.average_price,
-    value: Math.abs(raw.trade_value),
+    action: 'SELL',
+    quantity: 0.01,
+    price: 84450,
+    value: 844.5,
     pnl,
-    product: raw.product,
-    venue: raw.exchange,
-    at: new Date('2026-09-18T03:53:31.000Z'),
-    raw,
+    fee: 0.3378,
+    slippage: 0.169,
+    orderId: `order-${id}`,
+    timestamp: 1790973353.96429 * 1000,
+    product: 'Paper',
+    venue: 'Virtual',
+    at: new Date(1790973353964.29),
     ...overrides,
   }
 }
@@ -47,6 +41,10 @@ describe('realisedTotal', () => {
     expect(realisedTotal([fill('a', null)])).toBe(0)
     expect(realisedTotal([])).toBe(0)
   })
+
+  it('is zero for a paper ledger, which stores no per-fill result', () => {
+    expect(realisedTotal([fill('a', null), fill('b', null)])).toBe(0)
+  })
 })
 
 describe('contributionRows', () => {
@@ -57,7 +55,7 @@ describe('contributionRows', () => {
     expect(rows[rows.length - 1]?.running).toBe(realisedTotal(fills))
   })
 
-  it('skips open fills entirely', () => {
+  it('skips fills with no reported result entirely', () => {
     expect(contributionRows([fill('a', null)])).toEqual([])
   })
 })
@@ -75,24 +73,28 @@ describe('fillShare', () => {
 
 describe('fillsToCsv', () => {
   it('covers every detail-panel field and quotes hostile cells', () => {
-    const fills = [
-      fill('a', 5, {
-        product: 'MIS, intraday',
-        raw: trade({ orderid: 'ord-"7"', timestamp: '2026-09-18 03:53:31' }),
-      }),
-    ]
-    const csv = fillsToCsv(fills, realisedTotal(fills))
+    const csv = fillsToCsv(
+      [fill('a', 5, { product: 'Paper, intraday', orderId: 'ord-"7"' })],
+      realisedTotal([fill('a', 5)])
+    )
     const [header, body] = csv.trim().split('\n')
     expect(header).toBe(
-      'symbol,side,quantity,avg_price,trade_value,realised_pnl,pnl_share_pct,product,venue,order_id,timestamp'
+      'symbol,side,quantity,avg_price,trade_value,fee,slippage,realised_pnl,pnl_share_pct,product,venue,order_id,timestamp'
     )
-    expect(body).toContain('"MIS, intraday"')
+    expect(body).toContain('"Paper, intraday"')
     expect(body).toContain('"ord-""7"""')
   })
 
-  it('leaves realised columns blank for open fills', () => {
+  it('leaves unreported columns blank rather than zero', () => {
+    const csv = fillsToCsv([fill('a', null, { fee: null, slippage: null })], 0)
+    // fee, slippage, realised and share are all unreported, so all four are
+    // empty cells rather than zeros.
+    expect(csv).toContain('844.5,,,,,Paper,')
+  })
+
+  it('writes the stored timestamp as ISO rather than the engine epoch', () => {
     const csv = fillsToCsv([fill('a', null)], 0)
-    expect(csv).toContain(',,,SPOT,')
+    expect(csv.trim().split('\n')[1]).toContain('2026-10-02T20:35:53.964Z')
   })
 })
 

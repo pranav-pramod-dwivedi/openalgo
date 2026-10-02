@@ -1,46 +1,56 @@
 import { useMemo, useState } from 'react'
-import { EmptyNote, LoadingNote, StaleNote, UpdatedAt, useSnapshot } from '../components'
-import { assetName, derive, money, qty, relativeTime, signedMoney, toFillRows } from '../derive'
+import {
+  ACCOUNT_LABEL,
+  NOT_REPORTED,
+  PAPER_COMMAND,
+  paperFillRows,
+  VIRGIN_DETAIL,
+  VIRGIN_TITLE,
+} from '../account'
+import {
+  EmptyNote,
+  LoadingNote,
+  StaleNote,
+  TwoAccountsNote,
+  UpdatedAt,
+  useSnapshot,
+} from '../components'
+import { assetName, money, qty, relativeTime, signedMoney } from '../derive'
 import ExportFillsButton from '../ExportFillsButton'
 import FillContributions from '../FillContributions'
 import FillDetailModal from '../FillDetailModal'
-import { realisedTotal } from '../fills'
 
 type Filter = 'all' | 'buy' | 'sell'
 
 /**
- * Transactions. The prototype showed a monthly total, an "AI accuracy" score
- * and fee totals, none of which this account can produce. What it can produce
- * is every fill the exchange reported, so that is the whole page, with counts
- * derived from those same fills.
+ * Transactions. What it can show is every virtual fill the paper ledger
+ * recorded, with the size, price and fee the engine charged. The prototype's
+ * monthly total and "AI accuracy" score had nothing behind them, and there is
+ * no per-fill realized result here either: the engine reports realized as one
+ * account total, so the page reports that total and does not distribute it
+ * across fills that never carried it.
  */
 export default function TransactionsPage() {
   const snapshot = useSnapshot()
+  const account = snapshot.account.figures
   const [filter, setFilter] = useState<Filter>('all')
-  const fills = useMemo(() => toFillRows(snapshot.trades), [snapshot.trades])
-  const orders = snapshot.orders
-  const health = useMemo(() => derive(snapshot), [snapshot])
+  const fills = useMemo(() => paperFillRows(account?.fills ?? []), [account?.fills])
 
   const visible = useMemo(() => {
     if (filter === 'all') return fills
     return fills.filter((fill) => fill.action.toLowerCase() === filter)
   }, [fills, filter])
 
-  const grossVolume = useMemo(() => fills.reduce((sum, fill) => sum + fill.value, 0), [fills])
-  // Same helper the breakdown section totals with, so the header figure and
-  // the running sum agree by construction.
-  const closedPnl = useMemo(() => realisedTotal(fills), [fills])
-  const openOrders = useMemo(
-    () => orders.filter((order) => order.order_status === 'open').length,
-    [orders]
-  )
+  const realized = account?.realized ?? null
+  const unrealized = account?.unrealized ?? null
+  const fees = account?.fees ?? null
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selectedFill = fills.find((fill) => fill.id === selectedId) ?? null
 
-  if (snapshot.loading && !snapshot.funds) {
+  if (snapshot.account.loading && !account) {
     return (
       <div className="content-wrap page-view is-visible">
-        <LoadingNote label="Reading your trade history" />
+        <LoadingNote label="Reading your virtual trade history" />
       </div>
     )
   }
@@ -50,45 +60,49 @@ export default function TransactionsPage() {
       <section className="page-intro page-intro-inner">
         <div>
           <p className="eyebrow">
-            Transactions <span className="eyebrow-line" /> Audit trail
+            Transactions <span className="eyebrow-line" /> {ACCOUNT_LABEL}
           </p>
           <h1>
-            Every move,
+            Every virtual move,
             <br />
             <span className="period">made legible.</span>
           </h1>
           <p className="intro-copy">
-            Every executed order the exchange reported, with the result it produced.
+            Every simulated order the paper worker executed, with the size, price and fee it
+            charged.
           </p>
         </div>
       </section>
 
-      {snapshot.stale && <StaleNote />}
+      <TwoAccountsNote />
+
+      {snapshot.account.stale && <StaleNote />}
 
       <section className="transaction-summary">
         <article className="metric-card surface-card">
-          <span className="card-label">Realised P&amp;L</span>
-          <div className="metric-value">{signedMoney(closedPnl)}</div>
+          <span className="card-label">Realized P&amp;L</span>
+          <div className="metric-value">{read(realized, signedMoney)}</div>
           <div className="metric-foot">
-            <span>Across {fills.length} fills</span>
+            <span>Account total, across {fills.length} fills</span>
             <span className="metric-glyph">↗</span>
           </div>
         </article>
         <article className="metric-card surface-card">
-          <span className="card-label">Unrealised P&amp;L</span>
-          <div className="metric-value">{signedMoney(health.totalUnrealised)}</div>
-          <div className="metric-foot">
-            <span>On open positions</span>
-            <span className="metric-glyph">↗</span>
-          </div>
-        </article>
-        <article className="metric-card surface-card">
-          <span className="card-label">Traded value</span>
-          <div className="metric-value">{money(grossVolume)}</div>
+          <span className="card-label">Unrealized P&amp;L</span>
+          <div className="metric-value">{read(unrealized, signedMoney)}</div>
           <div className="metric-foot">
             <span>
-              {openOrders} order{openOrders === 1 ? '' : 's'} still working
+              On {account?.positions.length ?? 0} open virtual position
+              {account?.positions.length === 1 ? '' : 's'}
             </span>
+            <span className="metric-glyph">↗</span>
+          </div>
+        </article>
+        <article className="metric-card surface-card">
+          <span className="card-label">Fees charged</span>
+          <div className="metric-value">{read(fees, money)}</div>
+          <div className="metric-foot">
+            <span>Every simulated fill pays a fee</span>
             <span className="metric-glyph">→</span>
           </div>
         </article>
@@ -98,7 +112,7 @@ export default function TransactionsPage() {
         <div className="section-heading compact-heading">
           <div>
             <span className="card-label">All activity</span>
-            <h2>Fills</h2>
+            <h2>Virtual fills</h2>
           </div>
           <div className="transaction-filters">
             {(['all', 'buy', 'sell'] as const).map((option) => (
@@ -119,11 +133,11 @@ export default function TransactionsPage() {
         {visible.length > 0 ? <p className="pp-plain">Tap a fill for its full detail.</p> : null}
         {visible.length === 0 ? (
           <EmptyNote
-            title={fills.length === 0 ? 'No fills yet' : 'Nothing in this filter'}
+            title={fills.length === 0 ? VIRGIN_TITLE : 'Nothing in this filter'}
             detail={
               fills.length === 0
-                ? 'When an order executes, it appears here with size, price and result.'
-                : 'Try a different filter to see the rest of your fills.'
+                ? VIRGIN_DETAIL
+                : 'Try a different filter to see the rest of your virtual fills.'
             }
           />
         ) : (
@@ -150,7 +164,8 @@ export default function TransactionsPage() {
                   </strong>
                 </span>
                 <span>
-                  {qty(fill.quantity)} {fill.asset} at {money(fill.price)} · {fill.product}
+                  {qty(fill.quantity)} {fill.asset} at {money(fill.price)}
+                  {fill.fee === null || fill.fee === undefined ? '' : ` · fee ${money(fill.fee)}`}
                 </span>
                 <strong>{money(fill.value)}</strong>
                 <time title={fill.at?.toISOString()}>{relativeTime(fill.at)}</time>
@@ -159,21 +174,31 @@ export default function TransactionsPage() {
           </div>
         )}
 
-        {fills.some((fill) => fill.pnl !== null) && (
+        {fills.length > 0 ? (
           <div className="pp-note pp-note-quiet">
-            Closed fills carry a realised result of {signedMoney(closedPnl)} in total.{' '}
-            <UpdatedAt at={snapshot.updatedAt} />
+            The paper ledger records realized P&amp;L as one account total, so it is not attributed
+            to individual fills. <UpdatedAt at={snapshot.account.updatedAt} />
           </div>
-        )}
+        ) : null}
       </section>
 
-      <FillContributions fills={fills} />
+      <FillContributions fills={fills} realized={realized} />
 
       <FillDetailModal
         fill={selectedFill}
-        totalRealised={closedPnl}
+        totalRealised={realized ?? 0}
         onClose={() => setSelectedId(null)}
       />
+
+      <div className="pp-note pp-note-quiet">
+        Nothing on this page came from the Binance sandbox. To see that account,{' '}
+        <code>{PAPER_COMMAND} status</code> shows the worker's own view of it.
+      </div>
     </div>
   )
+}
+
+/** The ledger figure, or the words for its absence. Never a zero. */
+function read(value: number | null, format: (n: number) => string): string {
+  return value === null ? NOT_REPORTED : format(value)
 }

@@ -336,9 +336,11 @@ export interface PaperSnapshot {
 /**
  * The paper trading engine's own ledger.
  *
- * Every figure on the Paper page comes from here. Nothing is derived from the
- * exchange balance and nothing is invented locally: an empty engine returns
- * zeros and empty lists, and the page says so rather than filling the gap.
+ * Every account figure on the surface comes from here, because paper trading
+ * is permanent and this portfolio *is* the user's account. Nothing is derived
+ * from the exchange balance and nothing is invented locally: an empty engine
+ * returns zeros and empty lists, and the pages say so rather than filling the
+ * gap.
  */
 export function usePaperState(): PaperSnapshot {
   const [state, setState] = useState<PaperState | null>(null)

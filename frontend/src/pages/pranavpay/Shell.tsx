@@ -102,7 +102,11 @@ export default function Shell() {
   const initials = OWNER.initials
   const displayName = OWNER.name
 
-  const reachable = snapshot.funds !== null
+  // The rail reports on the virtual account, which is the paper ledger. The
+  // sandbox has its own state and is never summarised here: a green dot beside
+  // "connected" used to mean the Binance testnet answered, which reads as
+  // "your broker is connected" when no broker holds the user's money.
+  const ledgerLive = snapshot.account.state !== null
 
   return (
     <div className={`pp-root${scrolled ? ' is-scrolled' : ''}`} data-theme={pref}>
@@ -148,8 +152,8 @@ export default function Shell() {
           </NavLink>
 
           <div className="sidebar-foot">
-            <span className="live-dot" style={{ color: reachable ? '#4ade80' : '#f59e0b' }} />
-            {reachable ? 'Exchange connected' : 'Reconnecting'}
+            <span className="live-dot" style={{ color: ledgerLive ? '#4ade80' : '#f59e0b' }} />
+            {ledgerLive ? 'Virtual account live' : 'Reading your ledger'}
           </div>
         </aside>
 
@@ -181,9 +185,9 @@ export default function Shell() {
               <div className="market-status">
                 <span
                   className="status-pulse"
-                  style={{ color: reachable ? '#4ade80' : '#f59e0b' }}
+                  style={{ color: ledgerLive ? '#4ade80' : '#f59e0b' }}
                 />
-                <span>{reachable ? 'Markets open 24/7' : 'Connecting to exchange'}</span>
+                <span>{ledgerLive ? 'Paper worker ledger' : 'Reading your ledger'}</span>
               </div>
             </div>
           </header>

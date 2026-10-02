@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { tradingApi } from '@/api/trading'
-import { useAuthStore } from '@/stores/authStore'
-import type { Order, Position, Trade } from '@/types/trading'
+import { type PaperAccount, paperAccount } from './account'
+import { type PaperSnapshot, usePaperState } from './usePaperState'
 
 /**
- * Funds as the Binance service reports them. The floor fields are what make
- * the protected/tradable split honest: `tradable_usdt` is what the order path
- * will actually accept, and `savings_usdt` is the part no order can touch.
+ * The two accounts this surface shows, kept apart on purpose.
+ *
+ * `account` is the user's virtual trading account: the paper ledger at
+ * `/api/paper/state`, which is the only source an account card may read.
+ * `sandbox` is the Binance testnet the OpenAlgo terminal runs against. It is
+ * not the user's money, it is never added to an account figure, and it is only
+ * ever rendered inside a panel that names it.
  */
-export interface Funds {
+
+/** What Binance's account endpoint sends. Practice funds, never the user's. */
+export interface SandboxFunds {
   wallet_total_usd: string
   equity_usd: string
   trading_floor: string
@@ -22,12 +27,12 @@ export interface Funds {
   spot_usdt: string
   futures_usdt: string
   is_live: boolean
-  positions: RawPosition[]
-  spot_balances: AssetBalance[]
-  futures_balances: AssetBalance[]
+  positions: SandboxPosition[]
+  spot_balances: SandboxBalance[]
+  futures_balances: SandboxBalance[]
 }
 
-export interface RawPosition {
+export interface SandboxPosition {
   symbol: string
   amount: number
   side: 'LONG' | 'SHORT'
@@ -36,7 +41,7 @@ export interface RawPosition {
   unrealized_pnl: number
 }
 
-export interface AssetBalance {
+export interface SandboxBalance {
   asset: string
   free?: number
   locked?: number
@@ -45,58 +50,90 @@ export interface AssetBalance {
   available?: number
 }
 
-export interface WalletSnapshot {
-  funds: Funds | null
-  positions: Position[]
-  trades: Trade[]
-  orders: Order[]
-  /** Wall-clock of the last successful fetch, or null if it has never landed. */
+/** The testnet books, as figures with the exchange's own names kept intact. */
+export interface SandboxAmounts {
+  equity: number
+  tradable: number
+  savings: number
+  floor: number
+  openNotional: number
+  marginLocked: number
+}
+
+const sandboxNum = (value: string | number | undefined | null): number => {
+  const parsed = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''))
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+/**
+ * The sandbox's split, in the exchange's own vocabulary.
+ *
+ * Named for what it is so no caller can present it as the user's balance: the
+ * protected/tradable split belongs to a Binance testnet wallet, and a floor
+ * there says nothing whatever about the virtual account.
+ */
+export function sandboxAmounts(funds: SandboxFunds | null): SandboxAmounts | null {
+  if (!funds) return null
+  return {
+    equity: sandboxNum(funds.equity_usd),
+    tradable: sandboxNum(funds.tradable_usdt),
+    savings: sandboxNum(funds.savings_usdt),
+    floor: sandboxNum(funds.trading_floor),
+    openNotional: sandboxNum(funds.open_notional_usd),
+    marginLocked: sandboxNum(funds.utiliseddebits),
+  }
+}
+
+export interface SandboxSnapshot {
+  funds: SandboxFunds | null
+  /** Wall-clock of the last successful fetch, or null if it never landed. */
   updatedAt: Date | null
   loading: boolean
-  /** True when a fetch has failed at least once; the last good data still shows. */
+  /** True once a fetch has failed; the last good balances keep showing. */
   stale: boolean
   error: string | null
   refresh: () => void
 }
 
-const num = (value: string | number | undefined | null): number => {
-  const parsed = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''))
-  return Number.isFinite(parsed) ? parsed : 0
+export interface AccountSnapshot extends PaperSnapshot {
+  /** The ledger as the account cards read it. Null when there is no ledger. */
+  figures: PaperAccount | null
 }
 
-/** Values the funds endpoint sends as strings, as numbers. */
-export const toAmounts = (funds: Funds | null) => {
-  if (!funds) return null
-  return {
-    wallet: num(funds.wallet_total_usd),
-    equity: num(funds.equity_usd),
-    floor: num(funds.trading_floor),
-    savings: num(funds.savings_usdt),
-    tradable: num(funds.tradable_usdt),
-    openNotional: num(funds.open_notional_usd),
-    realised: num(funds.m2mrealized),
-    unrealised: num(funds.m2munrealized),
-    marginLocked: num(funds.utiliseddebits),
-    spotUsdt: num(funds.spot_usdt),
-    futuresUsdt: num(funds.futures_usdt),
-  }
+export interface WalletSnapshot {
+  account: AccountSnapshot
+  sandbox: SandboxSnapshot
 }
 
 /**
- * One fetch of everything the surface shows, shared by every panel.
+ * The single snapshot every PranavPay panel reads.
  *
- * The prototype hardcoded balances, positions and fills. Each of those is now
- * read here, and a panel that has no data renders an explicit empty state
- * rather than a plausible number. Polls on a slow interval and refetches on the
- * order events the socket already emits, so the books stay honest without a
- * request per tick.
+ * The account half is the paper ledger, fetched once by the shell and handed
+ * down, so the balance in the rail and the balance on the overview can never
+ * disagree. The sandbox half is fetched separately and stays separate; it is
+ * only ever shown inside a panel that says what it is.
  */
 export function useWalletSnapshot(): WalletSnapshot {
-  const apiKey = useAuthStore((state) => state.apiKey)
-  const [funds, setFunds] = useState<Funds | null>(null)
-  const [positions, setPositions] = useState<Position[]>([])
-  const [trades, setTrades] = useState<Trade[]>([])
-  const [orders, setOrders] = useState<Order[]>([])
+  const paper = usePaperState()
+  const sandbox = useSandboxFunds()
+
+  const account = useMemo<AccountSnapshot>(
+    () => ({ ...paper, figures: paperAccount(paper.state) }),
+    [paper]
+  )
+
+  return useMemo(() => ({ account, sandbox }), [account, sandbox])
+}
+
+/**
+ * The Binance testnet balances, and nothing else.
+ *
+ * Only `/auth/dashboard-data` is read. The positions, trade book and order book
+ * are deliberately not fetched: every account panel used to reach for them, and
+ * the fix is that no account panel can any more.
+ */
+export function useSandboxFunds(): SandboxSnapshot {
+  const [funds, setFunds] = useState<SandboxFunds | null>(null)
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
   const [loading, setLoading] = useState(true)
   const [stale, setStale] = useState(false)
@@ -113,69 +150,40 @@ export function useWalletSnapshot(): WalletSnapshot {
 
   const refresh = useCallback(() => setNonce((n) => n + 1), [])
 
-  // `nonce` is the manual-refresh trigger. It is read inside the effect only to
-  // re-run it, which is exactly what it is for, so the dependency is deliberate
-  // rather than redundant.
   useEffect(() => {
     void nonce
-    if (!apiKey) {
-      // The session is still syncing. Staying "loading" is the honest state:
-      // an empty book would read as a flat account.
-      setLoading(true)
-      return
-    }
     let cancelled = false
 
     const load = async () => {
       try {
-        const fundsResponse = await fetch('/auth/dashboard-data', {
-          credentials: 'include',
-        })
-        if (fundsResponse.ok) {
-          const body = await fundsResponse.json()
-          if (body?.status === 'success' && body.data && !cancelled) {
-            setFunds(body.data as Funds)
-            setError(null)
-            setStale(false)
-            setUpdatedAt(new Date())
-          }
+        const response = await fetch('/auth/dashboard-data', { credentials: 'include' })
+        if (!response.ok) throw new Error(String(response.status))
+        const body = await response.json()
+        if (cancelled) return
+        if (body?.status === 'success' && body.data) {
+          setFunds(body.data as SandboxFunds)
+          setError(null)
+          setStale(false)
+          setUpdatedAt(new Date())
         } else {
-          setStale(true)
+          setError('The testnet sandbox did not report a balance.')
         }
       } catch {
-        setStale(true)
+        if (!cancelled) {
+          setStale(true)
+          setError('The testnet sandbox did not answer.')
+        }
       }
-
-      const [positionResult, tradeResult, orderResult] = await Promise.allSettled([
-        tradingApi.getPositions(apiKey),
-        tradingApi.getTrades(apiKey),
-        tradingApi.getOrders(apiKey),
-      ])
-      if (cancelled) return
-
-      if (positionResult.status === 'fulfilled' && positionResult.value.data) {
-        setPositions(positionResult.value.data)
-      }
-      if (tradeResult.status === 'fulfilled' && tradeResult.value.data) {
-        setTrades(tradeResult.value.data)
-      }
-      if (orderResult.status === 'fulfilled' && orderResult.value.data) {
-        setOrders(orderResult.value.data.orders ?? [])
-      }
-      if (!aliveRef.current) return
-      setLoading(false)
+      if (aliveRef.current) setLoading(false)
     }
 
-    load()
-    const timer = setInterval(load, 30_000)
+    void load()
+    const timer = setInterval(load, 60_000)
     return () => {
       cancelled = true
       clearInterval(timer)
     }
-  }, [apiKey, nonce])
+  }, [nonce])
 
-  return useMemo(
-    () => ({ funds, positions, trades, orders, updatedAt, loading, stale, error, refresh }),
-    [funds, positions, trades, orders, updatedAt, loading, stale, error, refresh]
-  )
+  return { funds, updatedAt, loading, stale, error, refresh }
 }
