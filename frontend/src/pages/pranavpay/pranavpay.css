@@ -902,3 +902,102 @@
 .pp-root .pp-onboarding-index { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--ink); color: var(--on-ink); font-family: var(--mono); font-size: 9px; font-weight: 700; }
 .pp-root .pp-onboarding-actions { justify-content: space-between; }
 @media (max-width: 760px) { .pp-root .pp-onboarding-card { padding: 20px 17px; } }
+
+/* Paper trading panel. The banner is the first thing on the page and stays
+   unmissable, because every figure below it is simulated. */
+.pp-root .pp-paper-banner {
+  display: block;
+  margin: 0 0 18px;
+  padding: 11px 15px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--soft);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .09em;
+  text-align: center;
+}
+.pp-root .pp-paper-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.pp-root .pp-paper-balance { display: grid; gap: 5px; align-content: start; }
+.pp-root .pp-paper-amount { font-size: 21px; font-weight: 700; letter-spacing: -.03em; }
+.pp-root .pp-paper-balance small { color: var(--muted); font-size: 9.5px; line-height: 1.5; }
+.pp-root .pp-paper-section { margin-bottom: 14px; }
+.pp-root .pp-paper-two {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.pp-root .pp-paper-table-wrap { width: 100%; overflow-x: auto; }
+.pp-root .pp-paper-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+.pp-root .pp-paper-table th {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted-dark);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.pp-root .pp-paper-table td {
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+.pp-root .pp-paper-table td strong { color: var(--ink); }
+.pp-root .pp-paper-table .is-positive { color: var(--ink); }
+.pp-root .pp-paper-table .is-negative { color: var(--ink); text-decoration: underline; }
+.pp-root .pp-paper-strategies { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.pp-root .pp-paper-strategies > li {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+.pp-root .pp-paper-strategies strong { font-size: 11px; letter-spacing: -.01em; }
+.pp-root .pp-paper-strategies small { color: var(--muted-dark); font-family: var(--mono); font-size: 8.5px; }
+.pp-root .pp-paper-strategies span { color: var(--muted); font-size: 9.5px; }
+.pp-root .pp-paper-facts { display: grid; gap: 7px; margin: 0; }
+.pp-root .pp-paper-facts > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.pp-root .pp-paper-facts dt { color: var(--muted); font-size: 9.5px; }
+.pp-root .pp-paper-facts dd { margin: 0; font-family: var(--mono); font-size: 10px; text-align: right; overflow-wrap: anywhere; }
+.pp-root .pp-paper-decisions { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.pp-root .pp-paper-decisions > li {
+  display: grid;
+  grid-template-columns: minmax(90px, auto) 1fr auto;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--paper);
+}
+.pp-root .pp-paper-kind {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.pp-root .pp-paper-payload { color: var(--muted); font-size: 9.5px; overflow-wrap: anywhere; }
+.pp-root .pp-paper-decisions time { color: var(--muted-dark); font-family: var(--mono); font-size: 8.5px; white-space: nowrap; }
+.pp-root .pp-paper-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+
+@media (max-width: 760px) {
+  .pp-root .pp-paper-decisions > li { grid-template-columns: 1fr auto; }
+  .pp-root .pp-paper-payload { grid-column: 1 / -1; }
+}

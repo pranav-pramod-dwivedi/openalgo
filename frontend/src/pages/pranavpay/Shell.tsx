@@ -10,6 +10,7 @@ const SECTIONS = [
   { to: '/wallet', label: 'Wallet', icon: 'wallet', end: false },
   { to: '/transactions', label: 'Transactions', icon: 'list', end: false },
   { to: '/manage', label: 'Manage', icon: 'gear', end: false },
+  { to: '/paper', label: 'Paper', icon: 'flask', end: false },
 ] as const
 
 /**
@@ -23,6 +24,7 @@ const CRUMB_LABELS: Array<[string, string]> = [
   ['/transactions', 'Transactions'],
   ['/manage', 'Manage'],
   ['/account', 'Account settings'],
+  ['/paper', 'Paper trading'],
 ]
 
 const ICONS: Record<string, React.ReactNode> = {
@@ -47,6 +49,12 @@ const ICONS: Record<string, React.ReactNode> = {
       <path d="m16 15 3 2.5-3 2.5" />
     </>
   ),
+  flask: (
+    <>
+      <path d="M9 3h6M10 3v5.2L5.6 17A2 2 0 0 0 7.4 20h9.2a2 2 0 0 0 1.8-3L14 8.2V3" />
+      <path d="M7.6 14h8.8" />
+    </>
+  ),
   gear: (
     <>
       <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" />
@@ -60,6 +68,7 @@ const MOBILE_LABELS: Record<string, string> = {
   Wallet: 'Wallet',
   Transactions: 'Activity',
   Manage: 'Manage',
+  Paper: 'Paper',
 }
 
 /**

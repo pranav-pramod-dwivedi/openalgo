@@ -45,6 +45,42 @@ def init():
             c.execute("INSERT OR IGNORE INTO config VALUES(?,?)", (k, v))
 
 
+def ensure_column(table: str, column: str, decl: str) -> bool:
+    """Add a column to an existing table when it is missing. Returns True if added."""
+    with conn() as c:
+        cols = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
+        if column in cols:
+            return False
+        c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        return True
+
+
+def get_all(existing=None) -> dict:
+    """Every config key as a plain dict, for callers that read several at once.
+
+    Pass the caller's own connection when it already holds a write transaction:
+    a second connection would block against it in SQLite.
+    """
+    if existing is not None:
+        return {r["k"]: json.loads(r["v"]) for r in existing.execute("SELECT k,v FROM config")}
+    with conn() as c:
+        return {r["k"]: json.loads(r["v"]) for r in c.execute("SELECT k,v FROM config")}
+
+
+def set_many(values: dict, existing=None) -> None:
+    """Write several config keys in one transaction, so a cycle cannot half-persist."""
+    if existing is not None:
+        _write(existing, values)
+        return
+    with conn() as c:
+        _write(c, values)
+
+
+def _write(c, values: dict) -> None:
+    for k, v in values.items():
+        c.execute("INSERT OR REPLACE INTO config VALUES(?,?)", (k, json.dumps(v)))
+
+
 def get(k, default=None):
     with conn() as c:
         r = c.execute("SELECT v FROM config WHERE k=?", (k,)).fetchone()
@@ -56,9 +92,11 @@ def setc(k, v):
         c.execute("INSERT OR REPLACE INTO config VALUES(?,?)", (k, json.dumps(v)))
 
 
-def log(kind, payload):
+def log(kind, payload, existing=None):
+    """Append a decision. Pass the caller's connection when one is already open."""
+    row = (time.time(), kind, json.dumps(payload, default=str))
+    if existing is not None:
+        existing.execute("INSERT INTO decisions(ts,kind,payload) VALUES(?,?,?)", row)
+        return
     with conn() as c:
-        c.execute(
-            "INSERT INTO decisions(ts,kind,payload) VALUES(?,?,?)",
-            (time.time(), kind, json.dumps(payload, default=str)),
-        )
+        c.execute("INSERT INTO decisions(ts,kind,payload) VALUES(?,?,?)", row)

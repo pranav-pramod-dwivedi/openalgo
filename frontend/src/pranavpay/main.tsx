@@ -7,6 +7,7 @@ import { PageLoader } from '@/components/ui/page-loader'
 import AccountPage from '../pages/pranavpay/pages/AccountPage'
 import ManagePage from '../pages/pranavpay/pages/ManagePage'
 import OverviewPage from '../pages/pranavpay/pages/OverviewPage'
+import PaperPage from '../pages/pranavpay/pages/PaperPage'
 import TransactionsPage from '../pages/pranavpay/pages/TransactionsPage'
 import WalletPage from '../pages/pranavpay/pages/WalletPage'
 import Shell from '../pages/pranavpay/Shell'
@@ -37,6 +38,7 @@ function App() {
                 <Route path="transactions" element={<TransactionsPage />} />
                 <Route path="manage" element={<ManagePage />} />
                 <Route path="account" element={<AccountPage />} />
+                <Route path="paper" element={<PaperPage />} />
               </Route>
               <Route path="*" element={<PageLoader />} />
             </Routes>
