@@ -303,3 +303,21 @@ There is no live-order path anywhere in this system.
 
 If you ever want this to trade real money, that is a different system, and it
 should be built as one rather than by loosening a switch in here.
+## Asking the agent for a trade
+
+`/make-profitable-trade [SYMBOL] [MAX_RISK_USD]` places one paper trade in a
+single request and reports it back in plain English. There is no confirmation
+step: the request is the permission. Rules are in
+`.opencode/skills/profitable-trade/SKILL.md`.
+
+When the analyst is rate-limited the planner refuses with
+`analyst_unavailable` and the agent retries exactly once with
+`--allow-rules-only`. That plan carries `analyst_bypassed: true`, which is what
+lets `planner.execute` place it (`execute` refuses a plan that is neither
+analyst-backed nor explicitly bypassed), and the dashboard records it as
+unreviewed. The agent must say so in the report. Every other refusal — no edge,
+not enough cash, exposure cap, an open position, the daily loss limit, stale
+data — ends the run in one sentence, with no retry on another symbol.
+
+The planner always re-plans inside `--yes`; there is no path that places an
+order the planner did not produce in that same invocation.

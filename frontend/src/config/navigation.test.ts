@@ -64,7 +64,7 @@ describe('Navigation Config', () => {
   describe('profileMenuItems', () => {
     it('contains the kiosk menu items', () => {
       const labels = profileMenuItems.map((item) => item.label)
-      expect(labels).toEqual(['Agent', 'API Key'])
+      expect(labels).toEqual(['Agent', 'Paper Trading', 'API Key'])
     })
   })
 

@@ -245,6 +245,15 @@ def react_positions():
     return serve_react_app()
 
 
+# Paper trading (virtual money). The page itself is the PranavPay PaperPage
+# rendered inside the OpenAlgo shell; registering the path here only makes a
+# direct hit or refresh a known route rather than an unauthenticated 404 that
+# counts toward an IP ban (see CLAUDE.md).
+@react_bp.route("/paper", strict_slashes=False)
+def react_paper():
+    return serve_react_app()
+
+
 @react_bp.route("/orderbook")
 def react_orderbook():
     return serve_react_app()

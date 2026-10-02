@@ -574,3 +574,36 @@ This is **paper trading — virtual money** (`data/paper.db`, no broker).
 worker never diverge. Rules live in
 `.opencode/skills/profitable-trade/SKILL.md`; engine detail in
 `PAPER_TRADING.md`.
+
+### One request, one trade, one plain report
+
+`/make-profitable-trade [SYMBOL] [MAX_RISK_USD]` no longer waits for a second
+message. The ask is the permission, and the report comes back the moment the
+paper order is placed:
+
+```bash
+uv run python scripts/profitable_trade.py --symbol BTCUSDT --max-risk 25 --json                  # what the planner says
+uv run python scripts/profitable_trade.py --symbol BTCUSDT --max-risk 25 --yes                   # place it
+uv run python scripts/profitable_trade.py --symbol BTCUSDT --max-risk 25 --yes --allow-rules-only # reviewer rate-limited: plan and place together
+```
+
+The third form exists because the analyst being rate-limited is the common
+case, and stopping dead on it is the worst answer available: there is a plan
+sitting there. The agent retries once with `--allow-rules-only`, which sets
+`analyst_bypassed` on the plan and lets `planner.execute` through, and the
+report then states outright that no AI reviewed the trade. **An unreviewed
+trade is never reported as reviewed** — the omission would be worse than the
+trade, because the reviewer is the only thing in this path that was not the
+backtest.
+
+Any other refusal stops the run in one plain sentence. The agent does not walk
+the watchlist looking for a coin that will say yes; a refusal is the planner
+answering, and answering twice with different coins is the same as not having
+a threshold.
+
+The report is written for a trader: coin, side, amount, entry, stop-loss,
+target, money at risk, money if it works, the strategy with its backtest record,
+whether an AI reviewed it, and what would make it wrong. No status codes, no
+field names, no `analyst_bypassed` in front of a user — the same rule that
+applies to every other message in this repo. Rules live in
+`.opencode/skills/profitable-trade/SKILL.md`.

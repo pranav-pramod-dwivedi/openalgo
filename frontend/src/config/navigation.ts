@@ -3,6 +3,7 @@ import {
   CandlestickChart,
   ClipboardList,
   FileText,
+  FlaskConical,
   Key,
   LayoutDashboard,
   type LucideIcon,
@@ -44,6 +45,7 @@ export const mobileSheetItems = navItems.filter((item) => !bottomNavPaths.includ
 // Profile dropdown menu items
 export const profileMenuItems: NavItem[] = [
   { href: '/agent', label: 'Agent', icon: Bot },
+  { href: '/paper', label: 'Paper Trading', icon: FlaskConical },
   { href: '/apikey', label: 'API Key', icon: Key },
 ]
 

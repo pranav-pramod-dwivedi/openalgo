@@ -17,6 +17,7 @@ const Positions = lazy(() => import('@/pages/Positions'))
 const OrderBook = lazy(() => import('@/pages/OrderBook'))
 const TradeBook = lazy(() => import('@/pages/TradeBook'))
 const ApiKey = lazy(() => import('@/pages/ApiKey'))
+const Paper = lazy(() => import('@/pages/Paper'))
 const Trading = lazy(() => import('@/pages/Trading'))
 const AgentIndex = lazy(() => import('@/pages/agent/AgentIndex'))
 const AgentConfig = lazy(() => import('@/pages/agent/AgentConfig'))
@@ -48,6 +49,7 @@ function App() {
                 <Route path="/orderbook" element={<OrderBook />} />
                 <Route path="/tradebook" element={<TradeBook />} />
                 <Route path="/apikey" element={<ApiKey />} />
+                <Route path="/paper" element={<Paper />} />
               </Route>
 
               {/* Full-width protected routes */}

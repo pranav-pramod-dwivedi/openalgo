@@ -17,6 +17,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/search': 'Search',
   '/search/token': 'Token Search',
   '/apikey': 'API Key',
+  '/paper': 'Paper Trading',
   '/platforms': 'Platforms',
   '/tradingview': 'TradingView',
   '/gocharting': 'GoCharting',
