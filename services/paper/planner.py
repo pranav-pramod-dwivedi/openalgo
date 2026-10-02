@@ -78,6 +78,10 @@ NO_EDGE = "no_edge"
 NO_STRATEGIES = "no_validated_strategy"
 FAILED_VALIDATION = "strategy_failed_validation"
 ANALYST_UNAVAILABLE = "analyst_unavailable"
+
+# Plain-language reason from the analyst client for the most recent failed call,
+# so a refusal explains itself instead of reading as "no edge".
+_last_analyst_failure = ""
 LOW_TAKE_PROBABILITY = "analyst_p_take_below_threshold"
 INSUFFICIENT_CASH = "insufficient_cash"
 DAILY_LOSS_LIMIT = "daily_loss_limit"
@@ -392,6 +396,9 @@ def _ask_analyst(state: str) -> dict | None:
     except Exception:
         logger.warning("jev analyst call failed; plan will be refused")
         return None
+    if raw is None:
+        # Say why in the operator's words, so a refusal never reads as "no edge".
+        _last_analyst_failure = jev.failure_reason()
     if not isinstance(raw, dict):
         return None
     answers = raw.get("answers")
@@ -650,7 +657,10 @@ def _candidate(
                 symbol,
                 strategy_id,
                 ANALYST_UNAVAILABLE,
-                "the analyst did not answer, so there is no reasoned opinion to trade on",
+                (
+                    _last_analyst_failure
+                    or "the analyst did not answer, so there is no reasoned opinion to trade on"
+                ),
                 metrics=setup["metrics"],
                 strategy_validated=True,
             )
