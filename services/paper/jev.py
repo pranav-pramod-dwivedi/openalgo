@@ -27,7 +27,10 @@ def ask(state: str, questions: dict) -> dict | None:
         return None
     body = json.dumps({"model": "jev-1.13-free", "state": state, "questions": questions}).encode()
     req = urllib.request.Request(ZEN_URL, data=body, method="POST", headers={
-        "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "User-Agent": "openalgo-paper/1.0",
+    })
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             return json.loads(r.read())

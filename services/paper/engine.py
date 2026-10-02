@@ -24,6 +24,8 @@ def _candles(symbol: str) -> list[dict]:
 def research_cycle() -> None:
     """Generate experiments, backtest, register validated strategies."""
     db.log("research_start", {"watchlist": WATCHLIST})
+    strategies = []
+    exps = []
     for symbol in WATCHLIST:
         c = _candles(symbol)
         if len(c) < 60:
@@ -32,8 +34,7 @@ def research_cycle() -> None:
             for params in grid:
                 r = backtest(c, family, params)
                 exp_id = f"exp-{family}-{symbol}-{abs(hash(json.dumps(params, sort_keys=True))) % 10_000_000}"
-                db.conn().execute(
-                    "INSERT OR REPLACE INTO experiments VALUES(?,?,?,?,?,?)",
+                exps.append(
                     (
                         exp_id,
                         "research",
@@ -41,13 +42,12 @@ def research_cycle() -> None:
                         json.dumps(r),
                         time.time(),
                         "ok" if r["trades"] > 0 else "no_trades",
-                    ),
+                    )
                 )
                 # validate: at least 3 trades, positive net, bounded drawdown
                 if r["trades"] >= 3 and r["net_pnl"] > 0 and r["max_drawdown"] < 50:
                     sid = f"{family}-{symbol}"
-                    db.conn().execute(
-                        "INSERT OR REPLACE INTO strategies VALUES(?,?,?,?,?,?,?,?)",
+                    strategies.append(
                         (
                             sid,
                             "research",
@@ -57,10 +57,14 @@ def research_cycle() -> None:
                             "active",
                             time.time(),
                             1,
-                        ),
+                        )
                     )
                     db.log("strategy_registered", {"id": sid, "params": params, "metrics": r})
-    db.conn().commit()
+    with db.conn() as c:
+        for e in exps:
+            c.execute("INSERT OR REPLACE INTO experiments VALUES(?,?,?,?,?,?)", e)
+        for st in strategies:
+            c.execute("INSERT OR REPLACE INTO strategies VALUES(?,?,?,?,?,?,?,?)", st)
 
 
 def trading_cycle() -> None:
@@ -78,10 +82,14 @@ def trading_cycle() -> None:
         fn = FAMILIES[s["family"]]
         sig = fn(c, **json.loads(s["params"]))
         if sig:
-            state = f"{symbol} {s['family']} signal={sig} last={float(c[-1]['close']):.2f} regime={json.loads(s['metrics']).get('net_pnl',0)}"
-            verdict = jev.ask(state, {"trade": {"type": "choice", "choices": ["take", "skip"]}, "confidence": {"type": "choice", "choices": ["low", "medium", "high"]}})
+            state = f"{symbol} {s['family']} signal={sig} last={float(c[-1]['close']):.2f} regime={json.loads(s['metrics']).get('net_pnl', 0)}"
+            verdict = jev.ask(state, {"trade": {"type": "score", "criteria": ["skip", "take"]}})
             db.log("jev", {"symbol": symbol, "state": state, "verdict": verdict})
-            if verdict and verdict.get("answers", {}).get("trade", {}).get("choice") == "skip":
+            if (
+                verdict
+                and verdict.get("answers", {}).get("trade", {}).get("probabilities", {}).get("1", 0)
+                < 0.55
+            ):
                 continue
         with db.conn() as cc:
             pos = cc.execute(
@@ -139,6 +147,11 @@ def trading_cycle() -> None:
                         "paper_order",
                         {"symbol": symbol, "side": sig, "qty": qty, "strategy": s["id"]},
                     )
+    with db.conn() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO equity VALUES(?,?,?,?,?,?,?,?)",
+            (time.time(), cash, cash, 0.0, 0.0, 0.0, 0.0, 0.0),
+        )
 
 
 def _close(cc, pos, px, sid):
