@@ -1,6 +1,10 @@
 import { useMemo, useState } from 'react'
-import { assetName, derive, money, qty, relativeTime, signedMoney, toFillRows } from '../derive'
 import { EmptyNote, LoadingNote, StaleNote, UpdatedAt, useSnapshot } from '../components'
+import { assetName, derive, money, qty, relativeTime, signedMoney, toFillRows } from '../derive'
+import ExportFillsButton from '../ExportFillsButton'
+import FillContributions from '../FillContributions'
+import FillDetailModal from '../FillDetailModal'
+import { realisedTotal } from '../fills'
 
 type Filter = 'all' | 'buy' | 'sell'
 
@@ -22,18 +26,16 @@ export default function TransactionsPage() {
     return fills.filter((fill) => fill.action.toLowerCase() === filter)
   }, [fills, filter])
 
-  const grossVolume = useMemo(
-    () => fills.reduce((sum, fill) => sum + fill.value, 0),
-    [fills]
-  )
-  const closedPnl = useMemo(
-    () => fills.filter((fill) => fill.pnl !== null).reduce((sum, fill) => sum + (fill.pnl ?? 0), 0),
-    [fills]
-  )
+  const grossVolume = useMemo(() => fills.reduce((sum, fill) => sum + fill.value, 0), [fills])
+  // Same helper the breakdown section totals with, so the header figure and
+  // the running sum agree by construction.
+  const closedPnl = useMemo(() => realisedTotal(fills), [fills])
   const openOrders = useMemo(
     () => orders.filter((order) => order.order_status === 'open').length,
     [orders]
   )
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const selectedFill = fills.find((fill) => fill.id === selectedId) ?? null
 
   if (snapshot.loading && !snapshot.funds) {
     return (
@@ -84,7 +86,9 @@ export default function TransactionsPage() {
           <span className="card-label">Traded value</span>
           <div className="metric-value">{money(grossVolume)}</div>
           <div className="metric-foot">
-            <span>{openOrders} order{openOrders === 1 ? '' : 's'} still working</span>
+            <span>
+              {openOrders} order{openOrders === 1 ? '' : 's'} still working
+            </span>
             <span className="metric-glyph">→</span>
           </div>
         </article>
@@ -108,9 +112,11 @@ export default function TransactionsPage() {
                 {option === 'all' ? 'All' : option === 'buy' ? 'Buys' : 'Sells'}
               </button>
             ))}
+            <ExportFillsButton fills={fills} />
           </div>
         </div>
 
+        {visible.length > 0 ? <p className="pp-plain">Tap a fill for its full detail.</p> : null}
         {visible.length === 0 ? (
           <EmptyNote
             title={fills.length === 0 ? 'No fills yet' : 'Nothing in this filter'}
@@ -129,7 +135,14 @@ export default function TransactionsPage() {
               <span>Time</span>
             </div>
             {visible.map((fill) => (
-              <div className="ledger-row" key={fill.id}>
+              <button
+                type="button"
+                className="ledger-row"
+                key={fill.id}
+                onClick={() => setSelectedId(fill.id)}
+                aria-haspopup="dialog"
+                style={{ textAlign: 'left', width: '100%' }}
+              >
                 <span>
                   <i className="ledger-icon">{fill.action === 'BUY' ? '↓' : '↑'}</i>
                   <strong>
@@ -141,7 +154,7 @@ export default function TransactionsPage() {
                 </span>
                 <strong>{money(fill.value)}</strong>
                 <time title={fill.at?.toISOString()}>{relativeTime(fill.at)}</time>
-              </div>
+              </button>
             ))}
           </div>
         )}
@@ -153,6 +166,14 @@ export default function TransactionsPage() {
           </div>
         )}
       </section>
+
+      <FillContributions fills={fills} />
+
+      <FillDetailModal
+        fill={selectedFill}
+        totalRealised={closedPnl}
+        onClose={() => setSelectedId(null)}
+      />
     </div>
   )
 }

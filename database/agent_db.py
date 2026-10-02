@@ -49,6 +49,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from cachetools import TTLCache
@@ -276,6 +277,11 @@ class AgMessage(Base):
     ``tools`` and ``notices`` are JSON because they are only ever read as part of
     the message that owns them, never queried across messages. A child table
     would buy nothing and cost a migration every time a frame gains a field.
+
+    ``reasoning`` holds the model's reasoning trace (``reasoning`` frames from
+    ``services/agent/frames.py``), stored alongside ``content`` so a reloaded
+    conversation still shows why the model answered the way it did. Nullable so
+    rows written before the column existed read back as empty.
     """
 
     __tablename__ = "ag_message"
@@ -289,6 +295,7 @@ class AgMessage(Base):
     )
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False, default="")
+    reasoning = Column(Text, nullable=True)
     tools = Column(JSON, nullable=True)
     notices = Column(JSON, nullable=True)
 
@@ -324,7 +331,10 @@ class AgAudit(Base):
     run_id = Column(String(120), nullable=True, index=True)
 
     args = Column(JSON, nullable=True)
-    risk_verdict = Column(String(60), nullable=True)
+    # Text, not String(60): the audit API returns the full verdict and SQLite
+    # does not enforce the old length in any case. Older databases keep their
+    # VARCHAR(60) declaration and still store longer values on SQLite.
+    risk_verdict = Column(Text, nullable=True)
     ok = Column(Boolean, nullable=True)
     response = Column(JSON, nullable=True)
     order_ids = Column(JSON, nullable=True)
@@ -538,6 +548,7 @@ def message_to_dict(row: AgMessage) -> dict:
         "conversation_id": row.conversation_id,
         "role": row.role,
         "content": row.content or "",
+        "reasoning": getattr(row, "reasoning", None) or "",
         "tools": row.tools or [],
         "notices": row.notices or [],
         "created_at": _iso(row.created_at),
@@ -1370,6 +1381,173 @@ def clear_agent_cache() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Persisted risk counters
+#
+# The order guard keeps its budget and open-position accounting in these rows
+# so it survives a restart and a new conversation. All keys carry the
+# ``agent_risk:`` prefix and they are not ``_SPEC`` keys, so the settings page
+# never shows them (``get_all`` iterates ``_SPEC`` only). Every helper reuses
+# ``get_setting``/``set_setting``/``delete_setting`` so the in-process TTL
+# cache stays coherent.
+#
+# Corrupt values raise ValueError rather than degrading to zero. A zero would
+# silently understate the exposure or the daily loss and let the guard through
+# - the exact fail-open direction the guard refuses. Callers must treat any
+# exception or False from these helpers as "state unknown" and fail closed for
+# new exposure.
+# ---------------------------------------------------------------------------
+
+RISK_COUNTER_PREFIX = "agent_risk:"
+
+
+def _risk_counter_key(*parts: str) -> str:
+    return RISK_COUNTER_PREFIX + ":".join(parts)
+
+
+def _decode_counter(raw: str | None, name: str) -> Decimal:
+    if raw is None:
+        return Decimal("0")
+    try:
+        value = Decimal(str(raw).strip())
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError(f"Risk counter {name} holds an unparseable value {raw!r}") from exc
+    if not value.is_finite():
+        raise ValueError(f"Risk counter {name} holds a non-finite value {raw!r}")
+    return value
+
+
+def get_daily_order_count(date_str: str) -> int:
+    """How many orders the guard has claimed so far on the given UTC date."""
+    raw = get_setting(_risk_counter_key("daily_orders", date_str))
+    if raw is None:
+        return 0
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Daily order counter for {date_str} is corrupt: {raw!r}") from exc
+
+
+def increment_daily_order_count(date_str: str) -> int:
+    """Record one more claimed order for the UTC date and return the new count."""
+    updated = get_daily_order_count(date_str) + 1
+    if not set_setting(_risk_counter_key("daily_orders", date_str), str(updated)):
+        raise RuntimeError(f"Could not persist the daily order counter for {date_str}")
+    return updated
+
+
+def decrement_daily_order_count(date_str: str) -> int:
+    """Give back one claimed order (a rollback) and return the new count."""
+    updated = max(0, get_daily_order_count(date_str) - 1)
+    if not set_setting(_risk_counter_key("daily_orders", date_str), str(updated)):
+        raise RuntimeError(f"Could not persist the daily order counter for {date_str}")
+    return updated
+
+
+def get_daily_realised_pnl(date_str: str) -> Decimal:
+    """The day's realised trading P&L so far, as stored (negative is a loss)."""
+    return _decode_counter(get_setting(_risk_counter_key("daily_pnl", date_str)), date_str)
+
+
+def add_daily_realised_pnl(date_str: str, amount: Decimal | int | float | str) -> Decimal:
+    """Add one realised P&L delta for the UTC date and return the new total."""
+    updated = get_daily_realised_pnl(date_str) + _decode_counter(str(amount), date_str)
+    if not set_setting(_risk_counter_key("daily_pnl", date_str), str(updated)):
+        raise RuntimeError(f"Could not persist the daily realised P&L for {date_str}")
+    return updated
+
+
+def get_symbol_last_exit_at(symbol: str) -> datetime | None:
+    """When the tracked open position in the symbol last fully exited, or None."""
+    raw = get_setting(_risk_counter_key("exit", symbol))
+    if raw is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Last-exit stamp for {symbol} is corrupt: {raw!r}") from exc
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def record_symbol_exit(symbol: str, when: datetime | None = None) -> datetime:
+    """Stamp the symbol's last exit as ``when`` (default: now, UTC) and return it."""
+    stamp = when or datetime.now(UTC)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    if not set_setting(_risk_counter_key("exit", symbol), stamp.isoformat()):
+        raise RuntimeError(f"Could not persist the exit stamp for {symbol}")
+    return stamp
+
+
+def clear_symbol_exit(symbol: str) -> bool:
+    """Remove any tracked exit stamp for the symbol."""
+    return delete_setting(_risk_counter_key("exit", symbol))
+
+
+def get_open_position(symbol: str) -> Decimal | None:
+    """The tracked open notional for the symbol, or None when flat."""
+    raw = get_setting(_risk_counter_key("open", symbol))
+    if raw is None:
+        return None
+    return _decode_counter(raw, symbol)
+
+
+def add_open_position(symbol: str, notional: Decimal | int | float | str) -> Decimal:
+    """Add to the tracked open notional for the symbol and return the new total."""
+    updated = (get_open_position(symbol) or Decimal("0")) + _decode_counter(str(notional), symbol)
+    if not set_setting(_risk_counter_key("open", symbol), str(updated)):
+        raise RuntimeError(f"Could not persist the open position for {symbol}")
+    return updated
+
+
+def reduce_open_position(symbol: str, notional: Decimal | int | float | str) -> Decimal:
+    """Reduce the tracked open notional; the row is removed once it reaches zero."""
+    updated = (get_open_position(symbol) or Decimal("0")) - _decode_counter(str(notional), symbol)
+    if updated <= 0:
+        delete_setting(_risk_counter_key("open", symbol))
+        return Decimal("0")
+    if not set_setting(_risk_counter_key("open", symbol), str(updated)):
+        raise RuntimeError(f"Could not persist the open position for {symbol}")
+    return updated
+
+
+def clear_open_position(symbol: str) -> bool:
+    """Remove any tracked open notional for the symbol."""
+    return delete_setting(_risk_counter_key("open", symbol))
+
+
+def open_positions() -> dict[str, Decimal]:
+    """Every tracked open position as ``{symbol: notional}``."""
+    rows = (
+        db_session.query(AgSetting).filter(AgSetting.key.like(RISK_COUNTER_PREFIX + "open:%")).all()
+    )
+    return {row.key.split(":", 2)[-1]: _decode_counter(row.value, row.key) for row in rows}
+
+
+def total_open_exposure() -> Decimal:
+    """The sum of every tracked open notional."""
+    return sum(open_positions().values(), Decimal("0"))
+
+
+def clear_risk_counters() -> bool:
+    """Drop every ``agent_risk:`` row. Test cleanup and operator reset."""
+    try:
+        deleted = (
+            db_session.query(AgSetting)
+            .filter(AgSetting.key.like(RISK_COUNTER_PREFIX + "%"))
+            .delete(synchronize_session=False)
+        )
+        db_session.commit()
+        for key in list(_settings_cache):
+            if key.startswith(RISK_COUNTER_PREFIX):
+                _settings_cache.pop(key, None)
+        return bool(deleted)
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not clear the risk counters")
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Conversations
 # ---------------------------------------------------------------------------
 
@@ -1578,6 +1756,7 @@ def add_message(
     content: str,
     tools: list | None = None,
     notices: list | None = None,
+    reasoning: str | None = None,
 ) -> tuple[dict | None, str | None]:
     """Append one turn, and move its conversation to the top of the list.
 
@@ -1590,6 +1769,8 @@ def add_message(
         content: The rendered text.
         tools: Tool timeline entries, as the UI renders them.
         notices: Notice frames raised during the turn.
+        reasoning: The model's reasoning trace, if any. Nullable so callers
+            that predate the column keep working.
 
     Returns:
         ``(payload, error)``. Exactly one of the two is not None.
@@ -1601,6 +1782,7 @@ def add_message(
             conversation_id=conversation_id,
             role=role,
             content=content or "",
+            reasoning=reasoning or None,
             tools=tools,
             notices=notices,
         )
@@ -1773,6 +1955,7 @@ def list_audit(
     run_id: str | None = None,
     tool: str | None = None,
     limit: int = 200,
+    offset: int = 0,
 ) -> list[dict]:
     """The audit trail, newest first.
 
@@ -1781,9 +1964,11 @@ def list_audit(
         run_id: Restrict to one run.
         tool: Restrict to one tool.
         limit: Maximum rows to return.
+        offset: Rows to skip, for paginated reads.
 
     Returns:
-        A list of audit dicts.
+        A list of audit dicts. ``risk_verdict`` carries the full stored
+        verdict, never a truncated display string.
     """
     try:
         query = db_session.query(AgAudit)
@@ -1793,7 +1978,12 @@ def list_audit(
             query = query.filter(AgAudit.run_id == run_id)
         if tool:
             query = query.filter(AgAudit.tool == tool)
-        rows = query.order_by(AgAudit.ts.desc(), AgAudit.id.desc()).limit(limit).all()
+        rows = (
+            query.order_by(AgAudit.ts.desc(), AgAudit.id.desc())
+            .offset(max(int(offset or 0), 0))
+            .limit(limit)
+            .all()
+        )
         return [audit_to_dict(row) for row in rows]
     except Exception:
         logger.exception("Could not list the agent audit trail")

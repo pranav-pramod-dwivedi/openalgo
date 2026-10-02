@@ -25,9 +25,7 @@ export function useWatchedMarkets(snapshot: {
     }
     // No fallback symbol: this list is labelled "What you hold", so an
     // account holding nothing must return nothing rather than borrow BTC.
-    return [...unique]
-      .filter((symbol) => /^[A-Z0-9]{4,20}$/.test(symbol))
-      .slice(0, 12)
+    return [...unique].filter((symbol) => /^[A-Z0-9]{4,20}$/.test(symbol)).slice(0, 12)
   }, [snapshot.positions, snapshot.funds])
 }
 
@@ -184,10 +182,7 @@ export function markPosition(
 }
 
 /** Equity restated with the live marks, for the headline balance. */
-export function liveEquity(
-  snapshot: WalletSnapshot,
-  prices: Map<string, number>
-): number | null {
+export function liveEquity(snapshot: WalletSnapshot, prices: Map<string, number>): number | null {
   const equity = Number.parseFloat(snapshot.funds?.equity_usd ?? '')
   if (!Number.isFinite(equity)) return null
   let delta = 0
@@ -201,10 +196,7 @@ export function liveEquity(
 }
 
 /** Unrealised P&L restated with the live marks. */
-export function liveUnrealised(
-  positions: Position[],
-  prices: Map<string, number>
-): number | null {
+export function liveUnrealised(positions: Position[], prices: Map<string, number>): number | null {
   if (positions.length === 0) return 0
   let total = 0
   let marked = 0

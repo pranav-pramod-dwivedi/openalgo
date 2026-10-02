@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DataFreshness } from '@/components/ui/data-freshness'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
+import { useSocketOnline } from '@/hooks/useSocketOnline'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -114,9 +115,15 @@ function getPnLBadgeVariant(value: string | number): 'default' | 'destructive' |
   return 'secondary'
 }
 
+function num(value: string | number | null | undefined): number {
+  const n = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
 export default function Dashboard() {
   const { user } = useAuthStore()
   const { socket } = useSocketContext()
+  const isSocketOnline = useSocketOnline(socket)
   const [marginData, setMarginData] = useState<MarginData | null>(null)
   const username = (user?.username || '').toLowerCase()
   const isBinance =
@@ -407,7 +414,7 @@ export default function Dashboard() {
           <DataFreshness
             lastUpdated={lastUpdated}
             isRefreshing={isRefreshing || isLoading}
-            isConnected={socket?.connected}
+            isConnected={isSocketOnline}
           />
 
           <Button
@@ -867,13 +874,13 @@ export default function Dashboard() {
                             <span className="badge-short">▼ SHORT</span>
                           )}
                         </td>
-                        <td className="py-3 px-3.5">{Math.abs(p.amount)}</td>
-                        <td className="py-3 px-3.5">${p.entry_price.toFixed(2)}</td>
-                        <td className="py-3 px-3.5">${p.mark_price.toFixed(2)}</td>
-                        <td className={cn('py-3 px-3.5 text-right font-bold', getPnLColor(p.unrealized_pnl))}>
-                          {p.unrealized_pnl >= 0
-                            ? `+$${p.unrealized_pnl.toFixed(4)}`
-                            : `-$${Math.abs(p.unrealized_pnl).toFixed(4)}`}
+                        <td className="py-3 px-3.5">{Math.abs(num(p.amount))}</td>
+                        <td className="py-3 px-3.5">${num(p.entry_price).toFixed(2)}</td>
+                        <td className="py-3 px-3.5">${num(p.mark_price).toFixed(2)}</td>
+                        <td className={cn('py-3 px-3.5 text-right font-bold', getPnLColor(num(p.unrealized_pnl)))}>
+                          {num(p.unrealized_pnl) >= 0
+                            ? `+$${num(p.unrealized_pnl).toFixed(4)}`
+                            : `-$${Math.abs(num(p.unrealized_pnl)).toFixed(4)}`}
                         </td>
                       </tr>
                     ))

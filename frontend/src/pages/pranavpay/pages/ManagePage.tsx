@@ -1,5 +1,5 @@
-import { money, percent, qty, signedMoney } from '../derive'
 import { EmptyNote, LoadingNote, StaleNote, useSnapshot } from '../components'
+import { money, percent, qty, signedMoney } from '../derive'
 import { toAmounts } from '../useWalletSnapshot'
 
 /**
@@ -58,7 +58,9 @@ export default function ManagePage() {
             </span>
           </div>
           <div className="manage-status-line">
-            <div className="manage-status-number">{amounts ? money(amounts.floor).replace('$', '') : '—'}</div>
+            <div className="manage-status-number">
+              {amounts ? money(amounts.floor).replace('$', '') : '—'}
+            </div>
             <div>
               <strong>dollars are untouchable</strong>
               <small>The first part of your balance no order can spend</small>
@@ -142,7 +144,8 @@ export default function ManagePage() {
                   <span>
                     <strong>{position.symbol}</strong>
                     <small>
-                      {qty(Math.abs(position.quantity))} · {position.quantity < 0 ? 'Short' : 'Long'}
+                      {qty(Math.abs(position.quantity))} ·{' '}
+                      {position.quantity < 0 ? 'Short' : 'Long'}
                     </small>
                   </span>
                   <b>{signedMoney(position.pnl)}</b>

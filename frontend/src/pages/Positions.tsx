@@ -56,6 +56,7 @@ import {
 import { useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
+import { useSocketOnline } from '@/hooks/useSocketOnline'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
@@ -153,6 +154,7 @@ export default function Positions() {
   const { apiKey, user } = useAuthStore()
   const { isCrypto } = useSupportedExchanges()
   const { socket } = useSocketContext()
+  const isSocketOnline = useSocketOnline(socket)
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [positions, setPositions] = useState<Position[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -433,6 +435,9 @@ export default function Positions() {
     return groups
   }, [sortedPositions, grouping, getGroupKey])
 
+  const visibleColumnCount = isCrypto ? 8 : 9
+  const leadingColSpan = visibleColumnCount - 3
+
   // Calculate stats
   const stats = useMemo(() => {
     const long = filteredPositions.filter((p) => (p.quantity || 0) > 0).length
@@ -554,9 +559,13 @@ export default function Positions() {
       a.href = url
       const filename = `positions_${new Date().toISOString().split('T')[0]}.csv`
       a.download = filename
+      document.body.appendChild(a)
       a.click()
-      // Revoke the object URL to free memory
-      URL.revokeObjectURL(url)
+      setTimeout(() => {
+        // Revoke the object URL to free memory
+        URL.revokeObjectURL(url)
+        a.remove()
+      }, 100)
       showToast.success(`Downloaded ${filename}`, 'clipboard')
     } catch {
       showToast.error('Failed to export CSV', 'system')
@@ -672,7 +681,7 @@ export default function Positions() {
             <DataFreshness
               lastUpdated={lastUpdated}
               isRefreshing={isRefreshing}
-              isConnected={socket?.connected}
+              isConnected={isSocketOnline}
               className="ml-2"
             />
           </div>
@@ -971,7 +980,7 @@ export default function Positions() {
                             className="bg-muted/50 cursor-pointer hover:bg-muted"
                             onClick={() => toggleGroup(groupKey)}
                           >
-                            <TableCell colSpan={6}>
+                            <TableCell colSpan={leadingColSpan}>
                               <div className="flex items-center gap-3 py-1 font-semibold">
                                 {isCollapsed ? (
                                   <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -1090,7 +1099,7 @@ export default function Positions() {
                 </TableBody>
                 <TableFooter>
                   <TableRow className="bg-muted/50">
-                    <TableCell colSpan={6} className="text-right text-muted-foreground">
+                    <TableCell colSpan={leadingColSpan} className="text-right text-muted-foreground">
                       Total P&L:
                     </TableCell>
                     <TableCell

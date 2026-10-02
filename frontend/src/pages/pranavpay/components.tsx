@@ -44,7 +44,15 @@ export function CardLabel({ children }: { children: React.ReactNode }) {
   return <span className="card-label">{children}</span>
 }
 
-export function AssetCell({ asset, name, symbol }: { asset: string; name?: string; symbol?: string }) {
+export function AssetCell({
+  asset,
+  name,
+  symbol,
+}: {
+  asset: string
+  name?: string
+  symbol?: string
+}) {
   return (
     <div className="asset-cell">
       <span className="asset-icon">{assetGlyph(asset)}</span>
@@ -64,7 +72,10 @@ export function CapitalSplit({ compact = false }: { compact?: boolean }) {
   const { funds, positions, loading } = useSnapshot()
   if (loading && !funds) return <LoadingNote />
   const amounts = toAmounts(funds)
-  if (!amounts) return <EmptyNote title="No account data" detail="The exchange has not reported a balance yet." />
+  if (!amounts)
+    return (
+      <EmptyNote title="No account data" detail="The exchange has not reported a balance yet." />
+    )
 
   return (
     <div className={compact ? 'pp-split pp-split-compact' : 'pp-split'}>

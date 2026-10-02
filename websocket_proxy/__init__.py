@@ -3,10 +3,10 @@
 import logging
 
 from .base_adapter import (
-    BaseBrokerWebSocketAdapter,
     ENABLE_CONNECTION_POOLING,
     MAX_SYMBOLS_PER_WEBSOCKET,
     MAX_WEBSOCKET_CONNECTIONS,
+    BaseBrokerWebSocketAdapter,
 )
 from .broker_factory import (
     cleanup_all_pools,
@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 # Import the angel_adapter directly from the broker directory
 from broker.angel.streaming.angel_adapter import AngelWebSocketAdapter
 
+# Import the arrow_adapter
+from broker.arrow.streaming.arrow_adapter import ArrowWebSocketAdapter
+
+# Import the binance_demo_adapter (public market data only, no keys)
+from broker.binance_demo.streaming.binance_streaming import BinanceDemoWebSocketAdapter
+
 # Import the compositedge_adapter
 from broker.compositedge.streaming.compositedge_adapter import CompositedgeWebSocketAdapter
 
@@ -50,6 +56,14 @@ from broker.flattrade.streaming.flattrade_adapter import FlattradeWebSocketAdapt
 
 # Import the fyers_adapter
 from broker.fyers.streaming.fyers_websocket_adapter import FyersWebSocketAdapter
+
+# Import the hdfcsecurities_adapter
+from broker.hdfcsecurities.streaming.hdfcsecurities_adapter import (
+    HDFCSecuritiesWebSocketAdapter,
+)
+
+# Import the hdfcsky_adapter
+from broker.hdfcsky.streaming.hdfcsky_adapter import HDFCSkyWebSocketAdapter
 
 # Import the ibulls_adapter
 from broker.ibulls.streaming.ibulls_adapter import IbullsWebSocketAdapter
@@ -105,17 +119,6 @@ from broker.wisdom.streaming.wisdom_adapter import WisdomWebSocketAdapter
 # Import the zerodha_adapter
 from broker.zerodha.streaming.zerodha_adapter import ZerodhaWebSocketAdapter
 
-# Import the arrow_adapter
-from broker.arrow.streaming.arrow_adapter import ArrowWebSocketAdapter
-
-# Import the hdfcsky_adapter
-from broker.hdfcsky.streaming.hdfcsky_adapter import HDFCSkyWebSocketAdapter
-
-# Import the hdfcsecurities_adapter
-from broker.hdfcsecurities.streaming.hdfcsecurities_adapter import (
-    HDFCSecuritiesWebSocketAdapter,
-)
-
 # AliceBlue adapter will be loaded dynamically
 
 # Register adapters
@@ -146,6 +149,7 @@ register_adapter("pocketful", PocketfulWebSocketAdapter)
 register_adapter("nubra", NubraWebSocketAdapter)
 register_adapter("rmoney", RMoneyWebSocketAdapter)
 register_adapter("arrow", ArrowWebSocketAdapter)
+register_adapter("binance_demo", BinanceDemoWebSocketAdapter)
 register_adapter("hdfcsky", HDFCSkyWebSocketAdapter)
 register_adapter("hdfcsecurities", HDFCSecuritiesWebSocketAdapter)
 
@@ -201,6 +205,7 @@ __all__ = [
     "NubraWebSocketAdapter",
     "RMoneyWebSocketAdapter",
     "ArrowWebSocketAdapter",
+    "BinanceDemoWebSocketAdapter",
     "HDFCSkyWebSocketAdapter",
     "HDFCSecuritiesWebSocketAdapter",
 ]

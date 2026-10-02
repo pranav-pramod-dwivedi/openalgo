@@ -1,16 +1,16 @@
 import { useMemo } from 'react'
+import { EmptyNote } from './components'
 import {
   assetName,
+  type EquityPoint,
   equityDomain,
   equityToPoints,
-  type EquityPoint,
   type FillRow,
   money,
   percent,
   portfolioSeries,
   signedMoney,
 } from './derive'
-import { EmptyNote } from './components'
 import { toPath } from './useCandles'
 
 export type RangeKey = '1D' | '1W' | '1M' | '3M'
@@ -137,7 +137,8 @@ export function PortfolioChart({
           <>
             <span className="chart-value">{signedMoney(change.absolute)}</span>
             <span className="chart-caption">
-              {percent(change.percent)} on {money(change.from)} · {RANGE_CAPTION[range].toLowerCase()}
+              {percent(change.percent)} on {money(change.from)} ·{' '}
+              {RANGE_CAPTION[range].toLowerCase()}
             </span>
           </>
         ) : (
@@ -208,7 +209,9 @@ function timeLabels(series: EquityPoint[]): string[] {
     const date = new Date(point.t)
     picked.push(
       date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
-        (date.getHours() ? ` ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : '')
+        (date.getHours()
+          ? ` ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
+          : '')
     )
   }
   return picked

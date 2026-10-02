@@ -473,7 +473,8 @@ Exchange codes:
 
 - Tradable: NSE and BSE (equity), NFO and BFO (futures and options), CDS and BCD
   (currency), MCX and NCDEX (commodity), NCO (NSE commodities, Zerodha only),
-  CRYPTO (Delta Exchange only).
+  CRYPTO (Delta Exchange, and Binance via binance_demo with FUTURES and SPOT
+  products).
 - Quote-only, never tradable: NSE_INDEX, BSE_INDEX, MCX_INDEX and GLOBAL_INDEX
   (US30, JAPAN225, HANGSENG, GIFTNIFTY and similar, Zerodha only). Use them for
   quotes, LTP, history and depth. An order on one of these is always wrong; the
@@ -497,16 +498,18 @@ These are closed vocabularies. Anything outside them is rejected.
 
 - Action: BUY or SELL.
 - Product: CNC (delivery, cash segments only), NRML (carry-forward for futures
-  and options), MIS (intraday, squared off by the exchange cut-off). A cash
-  equity order is CNC or MIS; a derivatives order is NRML or MIS. CNC on a
-  derivatives exchange is always wrong.
+  and options), MIS (intraday, squared off by the exchange cut-off), and for
+  crypto on Binance FUTURES (perpetuals) or SPOT (cash). A cash equity order
+  is CNC or MIS; a derivatives order is NRML or MIS; a crypto order is
+  FUTURES or SPOT. CNC on a derivatives exchange is always wrong.
 - Price type: MARKET, LIMIT, SL (stop-loss limit) or SL-M (stop-loss market).
   MARKET carries no price and no trigger. LIMIT carries a price. SL carries both
   a price and a trigger price. SL-M carries a trigger price only. Sending a
   price a type does not use is an error, not a harmless extra.
-- Quantity is a whole number of units, never a number of lots. For a derivative
-  it must be a multiple of that contract's lot size, which you look up rather
-  than assume.
+- Quantity may be fractional down to 8 decimal places (for example 0.001 of a
+  crypto unit) and must be a positive number of units, never a number of lots
+  and never zero or negative. For a derivative it must be a multiple of that
+  contract's lot size, which you look up rather than assume.
 - A price must respect the instrument's tick size.
 
 State the exact order you intend to place, in these words, before you ask for

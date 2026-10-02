@@ -9,6 +9,16 @@
       content="PranavPay - a calm view of your Binance account, its positions and its guardrails."
     />
     <title>PranavPay</title>
+    <!--
+      No service worker is registered on purpose: a cached offline shell would
+      serve stale money figures as if live. PranavPay always reads fresh.
+    -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="PranavPay" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23000'/%3E%3Cpath d='M21 16h14c9 0 15 5 15 13s-6 13-15 13h-6v7h-8V16Zm8 8v10h5c5 0 8-2 8-5s-3-5-8-5h-5Z' fill='%23fff'/%3E%3C/svg%3E" />
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23000'/%3E%3Cpath d='M21 16h14c9 0 15 5 15 13s-6 13-15 13h-6v7h-8V16Zm8 8v10h5c5 0 8-2 8-5s-3-5-8-5h-5Z' fill='%23fff'/%3E%3C/svg%3E"

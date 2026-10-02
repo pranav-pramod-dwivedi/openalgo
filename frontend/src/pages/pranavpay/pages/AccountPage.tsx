@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import { useAuthStore } from '@/stores/authStore'
-import { formatDate, money, OWNER } from '../derive'
 import { EmptyNote, LoadingNote, UpdatedAt, useSnapshot } from '../components'
+import { formatDate, money, OWNER } from '../derive'
+import { requestReopenOnboarding } from '../Onboarding'
 import { toAmounts } from '../useWalletSnapshot'
 
 /**
@@ -124,6 +125,19 @@ export default function AccountPage() {
               </span>
               <b>{Intl.DateTimeFormat().resolvedOptions().timeZone}</b>
             </div>
+            <div>
+              <span>
+                <strong>Intro tour</strong>
+                <small>What tradable means, practice money, the AI state</small>
+              </span>
+              <button
+                type="button"
+                className="pp-reopen-onboarding"
+                onClick={requestReopenOnboarding}
+              >
+                Replay intro
+              </button>
+            </div>
           </div>
         </article>
       </section>
@@ -202,9 +216,7 @@ export default function AccountPage() {
               Charting terminal <span>→</span>
             </a>
           </div>
-          <div className="pp-note pp-note-quiet">
-            Last checked {formatDate(snapshot.updatedAt)}
-          </div>
+          <div className="pp-note pp-note-quiet">Last checked {formatDate(snapshot.updatedAt)}</div>
         </article>
       </section>
     </div>

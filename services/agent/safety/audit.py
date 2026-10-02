@@ -233,24 +233,20 @@ def extract_order_ids(payload: Any, *, _depth: int = 0) -> list[str]:
 
 
 def _verdict_summary(risk_verdict: Any) -> str | None:
-    """Render a risk verdict as one short, stable string for its column.
+    """Render a risk verdict as one stable string for its column.
 
     Accepts a `Verdict` from `safety/risk.py`, a plain string, or None. The full
-    verdict belongs in the `result` row's response, where its numbers survive;
-    this column is what a human scans.
+    verdict belongs here and in the `result` row's response, where its numbers
+    survive; the audit API returns this column verbatim. `ag_audit.risk_verdict`
+    is Text so a long reason is stored whole.
     """
     if risk_verdict is None:
         return None
     allowed = getattr(risk_verdict, "allowed", None)
     code = getattr(risk_verdict, "code", None)
     if allowed is not None and code is not None:
-        summary = f"{'allow' if allowed else 'block'}:{code}"
-    else:
-        summary = str(risk_verdict)
-    # ag_audit.risk_verdict is String(60). SQLite would store an over-long value
-    # happily and PostgreSQL would refuse the whole row, taking the audit trail
-    # down on the one deployment that enforces it.
-    return summary[:60]
+        return f"{'allow' if allowed else 'block'}:{code}"
+    return str(risk_verdict)
 
 
 def append(

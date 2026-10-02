@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import { Link } from 'react-router'
-import { assetGlyph, assetName, money, qty, relativeTime, signedMoney, toFillRows } from '../derive'
 import { EmptyNote, LoadingNote, StaleNote, UpdatedAt, useSnapshot } from '../components'
+import { assetGlyph, assetName, money, qty, relativeTime, signedMoney, toFillRows } from '../derive'
+import ExportFillsButton from '../ExportFillsButton'
 import { toAmounts } from '../useWalletSnapshot'
 
 /**
@@ -188,6 +189,7 @@ export default function WalletPage() {
           <Link className="text-button" to="/transactions">
             Full ledger <span>→</span>
           </Link>
+          <ExportFillsButton fills={fills} />
         </div>
         {fills.length === 0 ? (
           <EmptyNote title="Nothing to show" detail="No executed orders have been reported." />

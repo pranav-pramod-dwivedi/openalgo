@@ -1845,6 +1845,53 @@ def delete_conversation(conversation_id: int):
     return _ok({"message": "Conversation deleted"})
 
 
+@agent_bp.route("/api/audit", methods=["GET"])
+@check_session_validity
+@_api_limit
+def list_audit():
+    """The mutating-call audit trail, newest first.
+
+    Session-guarded like the other agent routes. ``risk_verdict`` carries the
+    full stored verdict, never a truncated display string.
+    """
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+
+    try:
+        limit = min(max(int(request.args.get("limit", 50)), 1), 200)
+    except (TypeError, ValueError):
+        return _error("limit must be a whole number", 400)
+    try:
+        offset = max(int(request.args.get("offset", 0)), 0)
+    except (TypeError, ValueError):
+        return _error("offset must be a whole number", 400)
+
+    conversation_id = request.args.get("conversation_id")
+    if conversation_id is not None and conversation_id != "":
+        try:
+            conversation_id = int(conversation_id)
+        except (TypeError, ValueError):
+            return _error("conversation_id must be a whole number", 400)
+    else:
+        conversation_id = None
+
+    run_id = request.args.get("run_id") or None
+    tool = request.args.get("tool") or None
+
+    return _ok(
+        {
+            "data": agent_db.list_audit(
+                conversation_id=conversation_id,
+                run_id=run_id,
+                tool=tool,
+                limit=limit,
+                offset=offset,
+            )
+        }
+    )
+
+
 # ---------------------------------------------------------------------------
 # The turn recorder
 #
@@ -1860,6 +1907,8 @@ class _TurnRecorder:
 
     Attributes:
         text: The assistant's prose, concatenated from ``token`` deltas.
+        reasoning: The model's reasoning trace, concatenated from
+            ``reasoning`` deltas. Stored in its own column alongside content.
         tools: One entry per tool call, keyed by call id while it is open.
         notices: The turn's non-prose frames, each keeping its own ``type``
             discriminator: ``notice``, ``usage``, ``error``, ``confirm``, each
@@ -1880,6 +1929,7 @@ class _TurnRecorder:
         "_viz",
         "notices",
         "paused",
+        "reasoning",
         "run_id",
         "session_id",
         "text",
@@ -1888,6 +1938,7 @@ class _TurnRecorder:
 
     def __init__(self) -> None:
         self.text: list[str] = []
+        self.reasoning: list[str] = []
         self.tools: list[dict[str, Any]] = []
         self.notices: list[dict[str, Any]] = []
         self._viz: list[dict[str, Any]] = []
@@ -1907,6 +1958,8 @@ class _TurnRecorder:
         kind = payload.get("type")
         if kind == "token":
             self.text.append(str(payload.get("delta") or ""))
+        elif kind == "reasoning":
+            self.reasoning.append(str(payload.get("delta") or ""))
         elif kind == "ui":
             self._ui.append(str(payload.get("delta") or ""))
         elif kind == "start":
@@ -1949,6 +2002,10 @@ class _TurnRecorder:
         """The assistant's prose for this turn."""
         return "".join(self.text)
 
+    def reasoning_text(self) -> str:
+        """The model's reasoning trace for this turn."""
+        return "".join(self.reasoning)
+
     def sidecar(self) -> list[dict[str, Any]]:
         """Everything that belongs beside the prose, in the order it happened."""
         entries = list(self.notices)
@@ -1975,7 +2032,15 @@ class _TurnRecorder:
 
     def has_content(self) -> bool:
         """Whether the turn produced anything worth persisting."""
-        return bool(self.text or self.tools or self.notices or self._viz or self._ui or self._usage)
+        return bool(
+            self.text
+            or self.reasoning
+            or self.tools
+            or self.notices
+            or self._viz
+            or self._ui
+            or self._usage
+        )
 
 
 def _record_stream(chunks, recorder: _TurnRecorder, conversation_id: int, username: str):
@@ -2029,6 +2094,7 @@ def _persist_turn(recorder: _TurnRecorder, conversation_id: int, username: str) 
                 recorder.content(),
                 tools=recorder.tools or None,
                 notices=recorder.sidecar() or None,
+                reasoning=recorder.reasoning_text() or None,
             )
     except Exception:
         logger.exception("Could not persist the agent turn for conversation %s", conversation_id)

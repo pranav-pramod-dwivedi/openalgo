@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
-import { type Candle, type RangeKey, toPath, useCandles } from './useCandles'
 import { EmptyNote } from './components'
 import { baseAsset, money, percent, signedMoney } from './derive'
+import { type Candle, type RangeKey, toPath, useCandles } from './useCandles'
 
 const RANGE_LABELS: RangeKey[] = ['1D', '1W', '1M', '3M']
 
@@ -24,9 +24,7 @@ export function PriceChart({
   const [range, setRange] = useState<RangeKey>(defaultRange)
   const { points, change, loading, error, caption, candles } = useCandles(symbol, range)
   const path = useMemo(() => toPath(points), [points])
-  const areaPath = points.length
-    ? `${path} L 100 100 L 0 100 Z`
-    : ''
+  const areaPath = points.length ? `${path} L 100 100 L 0 100 Z` : ''
   const labels = useMemo(() => axisLabels(candles), [candles])
 
   return (
@@ -116,9 +114,7 @@ function axisLabels(candles: Candle[]): string[] {
   for (let i = 0; i < count; i += 1) {
     const candle = candles[i * step]
     const date = new Date(candle.timestamp * 1000)
-    picked.push(
-      date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-    )
+    picked.push(date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))
   }
   return picked
 }
@@ -127,9 +123,22 @@ function axisLabels(candles: Candle[]): string[] {
 export function PriceTile({ symbol, label }: { symbol: string; label: string }) {
   const { candles, change, loading, error } = useCandles(symbol, '1D')
   const closes = candles.map((candle) => candle.close)
-  const path = useMemo(() => toPath(
-    closes.map((close) => ({ x: 0, y: 0, timestamp: 0, open: close, high: close, low: close, close, volume: 0 }))
-  ), [closes])
+  const path = useMemo(
+    () =>
+      toPath(
+        closes.map((close) => ({
+          x: 0,
+          y: 0,
+          timestamp: 0,
+          open: close,
+          high: close,
+          low: close,
+          close,
+          volume: 0,
+        }))
+      ),
+    [closes]
+  )
 
   return (
     <div className="pp-tile">
@@ -144,13 +153,16 @@ export function PriceTile({ symbol, label }: { symbol: string; label: string }) 
           <span className="pp-tile-value">
             {loading || !closes.length ? '—' : money(closes[closes.length - 1])}
           </span>
-          <span className="pp-tile-change">
-            {change ? percent(change.percent) : '—'}
-          </span>
+          <span className="pp-tile-change">{change ? percent(change.percent) : '—'}</span>
         </>
       )}
       {path ? (
-        <svg className="pp-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <svg
+          className="pp-spark"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
           <path d={path} vectorEffect="non-scaling-stroke" />
         </svg>
       ) : null}

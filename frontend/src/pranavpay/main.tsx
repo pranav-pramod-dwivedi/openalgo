@@ -7,9 +7,9 @@ import { PageLoader } from '@/components/ui/page-loader'
 import AccountPage from '../pages/pranavpay/pages/AccountPage'
 import ManagePage from '../pages/pranavpay/pages/ManagePage'
 import OverviewPage from '../pages/pranavpay/pages/OverviewPage'
-import Shell from '../pages/pranavpay/Shell'
 import TransactionsPage from '../pages/pranavpay/pages/TransactionsPage'
 import WalletPage from '../pages/pranavpay/pages/WalletPage'
+import Shell from '../pages/pranavpay/Shell'
 import '../pages/pranavpay/pranavpay.css'
 
 /**

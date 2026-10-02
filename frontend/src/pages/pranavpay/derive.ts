@@ -300,7 +300,8 @@ export function alerts(snapshot: WalletSnapshot): DerivedAlert[] {
       id: 'stale',
       severity: 'warning',
       title: 'Figures may be out of date',
-      detail: 'The last refresh did not reach the exchange. Values shown are the last ones received.',
+      detail:
+        'The last refresh did not reach the exchange. Values shown are the last ones received.',
       at: now,
     })
   }
@@ -468,7 +469,9 @@ export function portfolioStats(
     largestWin: wins.length ? [...wins].sort(bySize).reverse()[0] : null,
     largestLoss: losses.length ? [...losses].sort(bySize)[0] : null,
     bestDay: ranked.length ? { day: ranked[0][0], value: ranked[0][1] } : null,
-    worstDay: ranked.length ? { day: ranked[ranked.length - 1][0], value: ranked[ranked.length - 1][1] } : null,
+    worstDay: ranked.length
+      ? { day: ranked[ranked.length - 1][0], value: ranked[ranked.length - 1][1] }
+      : null,
     daysGreen: days.filter(([, value]) => value > 0).length,
     daysRed: days.filter(([, value]) => value < 0).length,
     capitalAtRisk,
@@ -498,10 +501,7 @@ export interface EquityDomain {
  * reports when the change is too small for that span to resolve, so the caller
  * can say so instead of letting a straight line imply a story.
  */
-export function equityDomain(
-  series: EquityPoint[],
-  scaleHint: number | null
-): EquityDomain | null {
+export function equityDomain(series: EquityPoint[], scaleHint: number | null): EquityDomain | null {
   if (series.length < 2) return null
   const values = series.map((point) => point.equity)
   const dataMin = Math.min(...values)

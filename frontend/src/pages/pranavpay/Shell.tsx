@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router'
 import { OWNER } from './derive'
+import { Onboarding } from './Onboarding'
+import { useTheme } from './theme'
 import { useWalletSnapshot } from './useWalletSnapshot'
 
 const SECTIONS = [
@@ -69,6 +71,7 @@ export default function Shell() {
   const location = useLocation()
   const snapshot = useWalletSnapshot()
   const [scrolled, setScrolled] = useState(false)
+  const { pref, cycle } = useTheme()
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 10)
@@ -80,11 +83,11 @@ export default function Shell() {
   const active = useMemo(() => {
     const match = CRUMB_LABELS.find(([path]) => location.pathname.startsWith(path))
     if (match) return match[1]
-    return SECTIONS.find((section) =>
-      section.end
-        ? location.pathname === section.to
-        : location.pathname.startsWith(section.to)
-    )?.label ?? 'Quick overview'
+    return (
+      SECTIONS.find((section) =>
+        section.end ? location.pathname === section.to : location.pathname.startsWith(section.to)
+      )?.label ?? 'Quick overview'
+    )
   }, [location.pathname])
 
   const initials = OWNER.initials
@@ -93,7 +96,7 @@ export default function Shell() {
   const reachable = snapshot.funds !== null
 
   return (
-    <div className={`pp-root${scrolled ? ' is-scrolled' : ''}`}>
+    <div className={`pp-root${scrolled ? ' is-scrolled' : ''}`} data-theme={pref}>
       <div className="app-shell">
         <aside className="sidebar" aria-label="Primary navigation">
           <div className="brand-lockup">
@@ -156,6 +159,16 @@ export default function Shell() {
               <strong>{active}</strong>
             </div>
             <div className="topbar-actions">
+              <button
+                type="button"
+                className="pp-theme-toggle"
+                onClick={cycle}
+                aria-label={`Color theme is ${pref}. Switch theme.`}
+                title={`Theme: ${pref} (system follows your device)`}
+              >
+                <span className="pp-theme-dot" aria-hidden="true" />
+                <span>{pref === 'system' ? 'System' : pref === 'light' ? 'Light' : 'Dark'}</span>
+              </button>
               <div className="market-status">
                 <span
                   className="status-pulse"
@@ -200,6 +213,8 @@ export default function Shell() {
           </NavLink>
         ))}
       </nav>
+
+      <Onboarding snapshot={snapshot} />
     </div>
   )
 }

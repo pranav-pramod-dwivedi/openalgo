@@ -55,6 +55,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { type OrderEventType, useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 // Note: AlertDialog still used for Cancel All Orders
+import { useSocketOnline } from '@/hooks/useSocketOnline'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
@@ -127,6 +128,8 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; l
   complete: { icon: CheckCircle2, color: 'text-green-500', label: 'complete' },
   rejected: { icon: XCircle, color: 'text-red-500', label: 'rejected' },
   cancelled: { icon: XCircle, color: 'text-gray-500', label: 'cancelled' },
+  pending: { icon: Clock, color: 'text-slate-500', label: 'pending' },
+  'trigger pending': { icon: Clock, color: 'text-slate-500', label: 'trigger pending' },
   open: { icon: Clock, color: 'text-blue-500', label: 'open' },
 }
 
@@ -134,6 +137,7 @@ export default function OrderBook() {
   const { apiKey, user } = useAuthStore()
   const { isCrypto } = useSupportedExchanges()
   const { socket } = useSocketContext()
+  const isSocketOnline = useSocketOnline(socket)
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [orders, setOrders] = useState<Order[]>([])
   const [stats, setStats] = useState<OrderStats | null>(null)
@@ -145,6 +149,14 @@ export default function OrderBook() {
   // Auto-refresh: poll every 30s even when no socket events arrive
   // (ensures data stays fresh even when no trades are happening)
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const retryTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
+
+  useEffect(() => {
+    const timers = retryTimersRef.current
+    return () => {
+      timers.forEach((t) => clearTimeout(t))
+    }
+  }, [])
 
   // Filter state
   const [statusFilter, setStatusFilter] = useState<string[]>([])
@@ -292,7 +304,7 @@ export default function OrderBook() {
       const response = await tradingApi.cancelOrder(orderid)
       if (response.status === 'success') {
         showToast.success(`Order cancelled: ${orderid}`, 'orders')
-        setTimeout(() => fetchOrders(true), 1000)
+        retryTimersRef.current.push(setTimeout(() => fetchOrders(true), 1000))
       } else {
         showToast.error(response.message || 'Failed to cancel order', 'orders')
       }
@@ -309,7 +321,7 @@ export default function OrderBook() {
       if (response.status === 'success') {
         showToast.success(response.message || 'All orders cancelled', 'orders')
         // Delay refresh to allow broker to process cancellations
-        setTimeout(() => fetchOrders(true), 2000)
+        retryTimersRef.current.push(setTimeout(() => fetchOrders(true), 2000))
       } else if (response.status === 'info') {
         showToast.info(response.message || 'No open orders to cancel', 'orders')
       } else {
@@ -391,7 +403,7 @@ export default function OrderBook() {
       if (response.status === 'success') {
         showToast.success(`Order modified: ${modifyingOrder.orderid}`, 'orders')
         setModifyDialogOpen(false)
-        setTimeout(() => fetchOrders(true), 1000)
+        retryTimersRef.current.push(setTimeout(() => fetchOrders(true), 1000))
       } else {
         showToast.error(response.message || 'Failed to modify order', 'orders')
       }
@@ -443,8 +455,12 @@ export default function OrderBook() {
       a.href = url
       const filename = `orderbook_${new Date().toISOString().split('T')[0]}.csv`
       a.download = filename
+      document.body.appendChild(a)
       a.click()
-      URL.revokeObjectURL(url)
+      setTimeout(() => {
+        URL.revokeObjectURL(url)
+        a.remove()
+      }, 100)
       showToast.success(`Downloaded ${filename}`, 'clipboard')
     } catch {
       showToast.error('Failed to export CSV', 'system')
@@ -478,7 +494,7 @@ export default function OrderBook() {
         <DataFreshness
           lastUpdated={lastUpdated}
           isRefreshing={isRefreshing}
-          isConnected={socket?.connected}
+          isConnected={isSocketOnline}
         />
       </div>
 
@@ -908,35 +924,67 @@ export default function OrderBook() {
               <div className="grid grid-cols-4 gap-4 text-sm">
                 <div>
                   <div className="text-muted-foreground text-xs">LTP</div>
-                  <div className="font-mono font-semibold">{formatCurrency(quotes.ltp)}</div>
+                  <div className="font-mono font-semibold">
+                    {Number.isFinite(Number(quotes.ltp))
+                      ? formatCurrency(Number(quotes.ltp))
+                      : '—'}
+                  </div>
                 </div>
                 <div>
                   <div className="text-muted-foreground text-xs">Bid</div>
-                  <div className="font-mono text-green-600">{formatCurrency(quotes.bid)}</div>
+                  <div className="font-mono text-green-600">
+                    {Number.isFinite(Number(quotes.bid))
+                      ? formatCurrency(Number(quotes.bid))
+                      : '—'}
+                  </div>
                 </div>
                 <div>
                   <div className="text-muted-foreground text-xs">Ask</div>
-                  <div className="font-mono text-red-600">{formatCurrency(quotes.ask)}</div>
+                  <div className="font-mono text-red-600">
+                    {Number.isFinite(Number(quotes.ask))
+                      ? formatCurrency(Number(quotes.ask))
+                      : '—'}
+                  </div>
                 </div>
                 <div>
                   <div className="text-muted-foreground text-xs">Prev Close</div>
-                  <div className="font-mono">{formatCurrency(quotes.prev_close)}</div>
+                  <div className="font-mono">
+                    {Number.isFinite(Number(quotes.prev_close))
+                      ? formatCurrency(Number(quotes.prev_close))
+                      : '—'}
+                  </div>
                 </div>
                 <div>
                   <div className="text-muted-foreground text-xs">Open</div>
-                  <div className="font-mono">{formatCurrency(quotes.open)}</div>
+                  <div className="font-mono">
+                    {Number.isFinite(Number(quotes.open))
+                      ? formatCurrency(Number(quotes.open))
+                      : '—'}
+                  </div>
                 </div>
                 <div>
                   <div className="text-muted-foreground text-xs">High</div>
-                  <div className="font-mono text-green-600">{formatCurrency(quotes.high)}</div>
+                  <div className="font-mono text-green-600">
+                    {Number.isFinite(Number(quotes.high))
+                      ? formatCurrency(Number(quotes.high))
+                      : '—'}
+                  </div>
                 </div>
                 <div>
                   <div className="text-muted-foreground text-xs">Low</div>
-                  <div className="font-mono text-red-600">{formatCurrency(quotes.low)}</div>
+                  <div className="font-mono text-red-600">
+                    {Number.isFinite(Number(quotes.low))
+                      ? formatCurrency(Number(quotes.low))
+                      : '—'}
+                  </div>
                 </div>
                 <div>
                   <div className="text-muted-foreground text-xs">Volume</div>
-                  <div className="font-mono">{quotes.volume.toLocaleString('en-IN')}</div>
+                  <div className="font-mono">
+                    {Number.isFinite(Number(quotes.volume))
+                      ? Number(quotes.volume).toLocaleString('en-IN')
+                      : '—'}
+                  </div>
                 </div>
               </div>
             ) : (

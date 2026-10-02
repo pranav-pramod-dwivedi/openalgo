@@ -153,6 +153,7 @@ export default function Trading() {
   const [apiKey, setApiKey] = useState<string | null>(null)
   const [wsUrl, setWsUrl] = useState<string | null>(null)
   const [noApiKey, setNoApiKey] = useState(false)
+  const [apiKeyMessage, setApiKeyMessage] = useState('No API key found for charting.')
 
   /* ── one drawing rail for every pane ─────────────────────────────────── */
   const [tool, setTool] = useState<string | null>(null)
@@ -425,19 +426,31 @@ export default function Trading() {
     let alive = true
     ;(async () => {
       try {
-        const [keyRes, cfgRes] = await Promise.all([
-          fetch('/api/websocket/apikey').then((r) => r.json()),
-          fetch('/api/websocket/config').then((r) => r.json()),
+        const [keyRaw, cfgRaw] = await Promise.all([
+          fetch('/api/websocket/apikey', { credentials: 'include' }),
+          fetch('/api/websocket/config', { credentials: 'include' }),
         ])
+        if (!keyRaw.ok || !cfgRaw.ok) {
+          if (alive) {
+            setApiKeyMessage('Charting service unavailable. Check your connection and reload.')
+            setNoApiKey(true)
+          }
+          return
+        }
+        const [keyRes, cfgRes] = await Promise.all([keyRaw.json(), cfgRaw.json()])
         if (!alive) return
         if (keyRes.status !== 'success') {
+          setApiKeyMessage('No API key found for charting.')
           setNoApiKey(true)
           return
         }
         setApiKey(keyRes.api_key)
         setWsUrl(cfgRes.websocket_url || 'ws://127.0.0.1:8765')
       } catch {
-        if (alive) setNoApiKey(true)
+        if (alive) {
+          setApiKeyMessage('No API key found for charting.')
+          setNoApiKey(true)
+        }
       }
     })()
     return () => {
@@ -610,7 +623,7 @@ export default function Trading() {
           <div className="min-h-0 min-w-0 flex-1">
             {noApiKey ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-                <p className="text-sm text-muted-foreground">No API key found for charting.</p>
+                <p className="text-sm text-muted-foreground">{apiKeyMessage}</p>
                 <a href="/apikey" className="text-sm font-medium text-primary underline">
                   Generate an API key
                 </a>

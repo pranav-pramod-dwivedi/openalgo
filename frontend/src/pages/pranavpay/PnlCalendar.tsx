@@ -49,7 +49,11 @@ export function PnlCalendar({ byDay }: { byDay: Map<string, number> }) {
 
   return (
     <>
-      <div className="pp-calendar" aria-label="Realised result for each of the last 30 days">
+      <div
+        className="pp-calendar"
+        role="img"
+        aria-label="Realised result for each of the last 30 days"
+      >
         {days.map((day) => {
           const state = !day.traded ? 'quiet' : (day.pnl ?? 0) >= 0 ? 'gain' : 'loss'
           return (
@@ -57,9 +61,7 @@ export function PnlCalendar({ byDay }: { byDay: Map<string, number> }) {
               key={day.key}
               className={`pp-day is-${state}${day.today ? ' is-today' : ''}`}
               title={
-                day.traded
-                  ? `${day.key}: ${signedMoney(day.pnl)}`
-                  : `${day.key}: no closed fills`
+                day.traded ? `${day.key}: ${signedMoney(day.pnl)}` : `${day.key}: no closed fills`
               }
             >
               <span className="pp-day-num">{day.day}</span>
@@ -78,9 +80,15 @@ export function PnlCalendar({ byDay }: { byDay: Map<string, number> }) {
       </p>
 
       <div className="calendar-legend">
-        <span><i className="positive-key" /> Day made money</span>
-        <span><i className="negative-key" /> Day lost money</span>
-        <span><i className="quiet-key" /> No trade</span>
+        <span>
+          <i className="positive-key" /> Day made money
+        </span>
+        <span>
+          <i className="negative-key" /> Day lost money
+        </span>
+        <span>
+          <i className="quiet-key" /> No trade
+        </span>
       </div>
     </>
   )

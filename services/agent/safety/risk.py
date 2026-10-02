@@ -33,27 +33,49 @@ Fixed by the build contract, and the order is the point:
 5. exchange
 6. product
 7. quantity
-8. session order cap
+8. session order cap, enforced against the persisted daily budget
 9. duplicate-order window
-10. notional and limit-price deviation
-11. affordability against available funds
+10. loss containment: daily realised loss, exit cooldown, max one open
+    position per symbol, and the total exposure cap
+11. notional and limit-price deviation
+12. affordability against available funds
 
 Which way a check fails when it cannot decide
 ---------------------------------------------
 
 Two directions, chosen per check rather than by habit:
 
-* **Affordability fails open.** Refusing a human-approved order because a quote
-  lookup hiccuped is worse than allowing it: the broker performs its own margin
-  check and rejects what the account cannot carry, so the guard's version is a
-  courtesy, not the control. Same for the notional cap and the deviation check
-  when no reference price arrived. Every fail-open path logs a warning and
-  reports itself in `Verdict.details["warnings"]`.
+* **Exposure-increasing orders fail closed.** A BUY is the only order kind
+  that adds exposure on this account model (equity-style: buys open or add,
+  sells reduce or close; a SELL that opens a short is not modelled). Whenever
+  the guard cannot verify the market state for a BUY - no last traded price,
+  no available funds, no readable risk counter, no reference price - the order
+  is blocked, with ``PRICE_UNAVAILABLE``, ``FUNDS_UNAVAILABLE`` or
+  ``STATE_UNAVAILABLE`` as the code. The old behaviour of warning and letting
+  the order through is gone. The broker performs its own margin check, but
+  that is not a substitute: the guard is the last thing between an approved
+  intention and a real order, and a guard that waves an uncheckable order
+  through is not a guard.
+* **Reductions and closes always pass.** A SELL is never blocked by a missing
+  price, a missing funds figure, an unavailable counter store, or a tripped
+  daily-loss halt: it reduces exposure, and it is the only way back out of a
+  bad trade. The old warn-and-continue path remains for it, so the operator
+  still sees the warning in ``Verdict.details["warnings"]``.
 * **Analyzer mode fails closed.** `require_analyzer_mode` is the operator
   stating in the database that the agent may not reach the live market. If the
   platform toggle cannot be read, allowing the order would send a live order
   under a policy that forbids exactly that. There is no broker-side backstop for
   this one.
+
+State that outlives a restart
+-----------------------------
+
+The budget and the exposure accounting are persisted through
+:mod:`database.agent_db` (``agent_risk:`` keys in the ``ag_setting`` table,
+keyed by UTC date for the counters), not in memory: a process restart, a new
+conversation, or a fresh ``RiskGuard`` does not reset them. Losing the
+counter store therefore blocks new exposure, because an unverifiable budget
+is an unknown budget.
 
 Claiming
 --------
@@ -68,6 +90,16 @@ A claim that is not used must be released. `release(verdict)` rolls back the
 count and the fingerprint, because a dispatch that never happened must not
 consume the session's budget, and the caller must be able to retry. `commit`
 just forgets the bookkeeping and keeps the claim.
+
+Fills are accounted once, at claim time, in the persisted store: a BUY claim
+adds its notional to the tracked open position, and a SELL that zeroes the
+tracker stamps the symbol's exit for the cooldown. Both are tied to the
+order that triggered them; if that dispatch is refused downstream, the
+caller must call `release`, which undoes the slot and the accounting.
+
+Where a tracked position goes stale (closed by hand, out of band), the
+exposure checks read high rather than low, which is the safe direction: the
+blocked BUY can be unblocked with ``agent_db.clear_open_position``.
 """
 
 from __future__ import annotations
@@ -178,6 +210,24 @@ class RiskCode(StrEnum):
     EMPTY_BASKET = "empty_basket"
     UNKNOWN_OPERATION = "unknown_operation"
     BULK_NOT_ALLOWED = "bulk_operation_not_allowed"
+    DAILY_LOSS = "daily_loss"
+    COOLDOWN = "cooldown"
+    MAX_POSITION = "max_position"
+    EXPOSURE_CAP = "exposure_cap"
+    PRICE_UNAVAILABLE = "price_unavailable"
+    FUNDS_UNAVAILABLE = "funds_unavailable"
+    STATE_UNAVAILABLE = "state_unavailable"
+
+
+def _increases_exposure(intent: _Intent) -> bool:
+    """Whether the order adds exposure under this account model.
+
+    Equity-style model used throughout this pass: a BUY opens or adds a
+    position, and a SELL reduces or closes it. A SELL that would open a
+    short is deliberately not modelled; on the account classes this guard
+    sizes, that order shapes a position the account already covers.
+    """
+    return intent.action == "BUY"
 
 
 def _jsonable(value: Any) -> Any:
@@ -496,6 +546,11 @@ class _Claim:
     fingerprints: tuple[str, ...]
     previous: dict[str, datetime]
     created_at: datetime
+    # What the fill accounting did to the persisted open-position tracker and
+    # the exit stamps, so a release can undo it. BUY claims carry a positive
+    # delta (notional added); SELL claims a negative one (notional removed).
+    position_deltas: tuple[tuple[str, Decimal], ...] = ()
+    exit_stamped: tuple[str, ...] = ()
 
 
 class RiskGuard:
@@ -539,8 +594,19 @@ class RiskGuard:
 
     @property
     def orders_claimed(self) -> int:
-        """How many orders this session has claimed so far."""
-        with self._lock:
+        """How many orders this session has claimed so far.
+
+        The count is the persisted daily budget for today's UTC date, so the
+        cap applies across restarts and new conversations. When the store
+        cannot be read, the in-memory count is returned and the claim path
+        will already have refused the order.
+        """
+        try:
+            from database import agent_db
+
+            today = self._as_utc(self._clock()).date().isoformat()
+            return agent_db.get_daily_order_count(today)
+        except Exception:
             return self._orders_claimed
 
     def reset(self) -> None:
@@ -637,6 +703,11 @@ class RiskGuard:
             return claimed
         token = claimed.details.get("claim_token")
 
+        loss_gate = self._check_loss_containment(intent, limits)
+        if not loss_gate.allowed:
+            self._rollback(token)
+            return loss_gate
+
         pricing = self._check_pricing(intent, limits, warnings)
         if not pricing.allowed:
             self._rollback(token)
@@ -644,11 +715,27 @@ class RiskGuard:
 
         required = self._cash_required(intent)
         funds = self._check_affordability(
-            required, intent.available_funds, limits, warnings, label=intent.describe()
+            required,
+            intent.available_funds,
+            limits,
+            warnings,
+            label=intent.describe(),
+            increases_exposure=_increases_exposure(intent),
         )
         if not funds.allowed:
             self._rollback(token)
             return funds
+
+        deltas, stamps, accounting_error = self._record_fill_accounting([intent])
+        if accounting_error is not None:
+            self._undo_accounting(deltas, stamps)
+            self._rollback(token)
+            return _blocked(
+                RiskCode.STATE_UNAVAILABLE,
+                "The exposure accounting could not be persisted, so this order is refused: "
+                "an unverifiable exposure is an unknown exposure.",
+            )
+        self._attach_accounting(token, deltas, stamps)
 
         details: dict[str, Any] = {
             "symbol": intent.symbol,
@@ -747,6 +834,50 @@ class RiskGuard:
         token = claimed.details.get("claim_token")
 
         for index, intent in enumerate(intents, start=1):
+            loss_gate = self._check_loss_containment(intent, limits)
+            if not loss_gate.allowed:
+                self._rollback(token)
+                return _blocked(
+                    loss_gate.code,
+                    f"Leg {index}: {loss_gate.reason}",
+                    leg=index,
+                    **loss_gate.details,
+                )
+
+        # The legs share one account, so the cap applies to their combined
+        # new notional, not each leg in isolation.
+        try:
+            from database import agent_db
+
+            open_total = agent_db.total_open_exposure()
+        except Exception:
+            logger.exception("Agent risk guard could not read the tracked open positions")
+            self._rollback(token)
+            return _blocked(
+                RiskCode.STATE_UNAVAILABLE,
+                "The tracked open positions could not be read, so the exposure cap cannot "
+                "be verified for this basket.",
+            )
+        basket_new = sum(
+            (
+                intent.reference_price * intent.quantity
+                for intent in intents
+                if _increases_exposure(intent) and intent.reference_price is not None
+            ),
+            Decimal("0"),
+        )
+        if open_total + basket_new > limits.max_exposure_usd:
+            self._rollback(token)
+            return _blocked(
+                RiskCode.EXPOSURE_CAP,
+                f"Tracked open exposure is {open_total:.2f} and this basket adds {basket_new:.2f}, "
+                f"which would take the total past the {limits.max_exposure_usd} cap.",
+                open_exposure=open_total,
+                new_notional=basket_new,
+                limit=limits.max_exposure_usd,
+            )
+
+        for index, intent in enumerate(intents, start=1):
             pricing = self._check_pricing(intent, limits, warnings)
             if not pricing.allowed:
                 self._rollback(token)
@@ -761,11 +892,27 @@ class RiskGuard:
 
         required = sum((self._cash_required(leg) for leg in intents), Decimal("0"))
         funds = self._check_affordability(
-            required, basket_funds, limits, warnings, label=f"this basket of {len(intents)} legs"
+            required,
+            basket_funds,
+            limits,
+            warnings,
+            label=f"this basket of {len(intents)} legs",
+            increases_exposure=any(_increases_exposure(leg) for leg in intents),
         )
         if not funds.allowed:
             self._rollback(token)
             return funds
+
+        deltas, stamps, accounting_error = self._record_fill_accounting(intents)
+        if accounting_error is not None:
+            self._undo_accounting(deltas, stamps)
+            self._rollback(token)
+            return _blocked(
+                RiskCode.STATE_UNAVAILABLE,
+                "The exposure accounting could not be persisted, so this basket is refused: "
+                "an unverifiable exposure is an unknown exposure.",
+            )
+        self._attach_accounting(token, deltas, stamps)
 
         details: dict[str, Any] = {
             "legs": len(intents),
@@ -827,6 +974,24 @@ class RiskGuard:
                 operation=name,
                 **details,
             )
+
+        if name == "close_position":
+            symbol = details.get("symbol")
+            if symbol:
+                try:
+                    from database import agent_db
+
+                    agent_db.clear_open_position(str(symbol).strip().upper())
+                    agent_db.record_symbol_exit(str(symbol).strip().upper())
+                except Exception:
+                    # The close itself must proceed (it reduces exposure), but
+                    # the cooldown stamp may have been lost, so the operator
+                    # must see it. Losing the stamp is fail-open for the
+                    # cooldown only; no new exposure is trapped, and no budget
+                    # is consumed.
+                    logger.exception(
+                        "Agent risk guard could not persist the exit stamp for %s", symbol
+                    )
 
         return _allowed(f"{name} passed every risk check.", operation=name, **details)
 
@@ -1000,15 +1165,29 @@ class RiskGuard:
         window = limits.duplicate_order_window_seconds
         needed = len(intents)
 
+        try:
+            from database import agent_db
+
+            today = now.date().isoformat()
+            claimed_today = agent_db.get_daily_order_count(today)
+        except Exception:
+            logger.exception("Agent risk guard could not read the persisted order budget")
+            return _blocked(
+                RiskCode.STATE_UNAVAILABLE,
+                "The persisted order budget could not be read, so this order cannot be "
+                "verified against the session cap. No new exposure is allowed until it "
+                "is readable again.",
+            )
+
         with self._lock:
-            if self._orders_claimed + needed > limits.max_orders_per_session:
+            if claimed_today + needed > limits.max_orders_per_session:
                 return _blocked(
                     RiskCode.SESSION_CAP_REACHED,
-                    f"This session has already claimed {self._orders_claimed} of its "
-                    f"{limits.max_orders_per_session} permitted orders and this request "
-                    f"needs {needed} more. Start a new conversation or raise "
-                    "max_orders_per_session.",
-                    orders_claimed=self._orders_claimed,
+                    f"The daily order budget is {claimed_today} of {limits.max_orders_per_session} "
+                    f"claimed orders and this request needs {needed} more. The budget is "
+                    "persisted, so starting a new conversation does not reset it. "
+                    "Start over tomorrow (UTC) or raise max_orders_per_session.",
+                    orders_claimed=claimed_today,
                     orders_allowed=limits.max_orders_per_session,
                     requested=needed,
                 )
@@ -1055,8 +1234,25 @@ class RiskGuard:
             }
             for fingerprint in fingerprints:
                 self._recent[fingerprint] = now
-            self._orders_claimed += needed
 
+            try:
+                for _ in range(needed):
+                    agent_db.increment_daily_order_count(today)
+            except Exception:
+                logger.exception("Agent risk guard could not persist the order budget")
+                for fingerprint in fingerprints:
+                    restored = previous_stamps.get(fingerprint)
+                    if restored is None:
+                        self._recent.pop(fingerprint, None)
+                    else:
+                        self._recent[fingerprint] = restored
+                return _blocked(
+                    RiskCode.STATE_UNAVAILABLE,
+                    "The order budget could not be persisted, so this order is refused: "
+                    "an unverifiable budget is an unknown budget.",
+                )
+
+            self._orders_claimed += needed
             token = uuid4().hex
             self._claims[token] = _Claim(
                 fingerprints=fingerprints, previous=previous_stamps, created_at=now
@@ -1080,6 +1276,17 @@ class RiskGuard:
                     self._recent.pop(fingerprint, None)
                 else:
                     self._recent[fingerprint] = restored
+            try:
+                from database import agent_db
+
+                today = self._as_utc(record.created_at).date().isoformat()
+                for _ in range(len(record.fingerprints)):
+                    agent_db.decrement_daily_order_count(today)
+            except Exception:
+                logger.exception(
+                    "Agent risk guard could not release the persisted daily order budget"
+                )
+            self._undo_accounting(record.position_deltas, record.exit_stamped)
         return True
 
     def _prune(self, now: datetime, window: int) -> None:
@@ -1108,10 +1315,180 @@ class RiskGuard:
             for token, _record in oldest_claims[: len(self._claims) - _MAX_PENDING_CLAIMS]:
                 self._claims.pop(token, None)
 
+    def _attach_accounting(
+        self,
+        token: Any,
+        deltas: tuple[tuple[str, Decimal], ...],
+        exit_stamped: tuple[str, ...],
+    ) -> None:
+        """Record the accounting applied for this claim, for a later release."""
+        if not token:
+            return
+        with self._lock:
+            record = self._claims.get(str(token))
+            if record is not None:
+                record.position_deltas = tuple(deltas)
+                record.exit_stamped = tuple(exit_stamped)
+
+    def _undo_accounting(
+        self, deltas: Sequence[tuple[str, Decimal]], exit_stamped: Sequence[str]
+    ) -> None:
+        """Give back persisted open-position accounting after a failed claim."""
+        try:
+            from database import agent_db
+
+            for symbol, delta in deltas:
+                if delta >= 0:
+                    agent_db.reduce_open_position(symbol, delta)
+                else:
+                    agent_db.add_open_position(symbol, -delta)
+            for symbol in exit_stamped:
+                agent_db.clear_symbol_exit(symbol)
+        except Exception:
+            logger.exception("Agent risk guard could not undo the exposure accounting")
+
+    def _record_fill_accounting(
+        self, intents: Sequence[_Intent]
+    ) -> tuple[tuple[tuple[str, Decimal], ...], tuple[str, ...], Exception | None]:
+        """Apply the claim to the persisted open-position tracker.
+
+        A BUY adds its notional to the tracker; a SELL reduces it, and when
+        the tracked position reaches zero the symbol's exit is stamped for the
+        cooldown. Returns the deltas and the stamps actually applied (even on
+        failure, for rollback), plus the exception if the store failed.
+        """
+        deltas: list[tuple[str, Decimal]] = []
+        stamps: list[str] = []
+        try:
+            from database import agent_db
+
+            for intent in intents:
+                reference = intent.reference_price
+                if intent.action == "BUY":
+                    if reference is not None:
+                        added = reference * intent.quantity
+                        agent_db.add_open_position(intent.symbol, added)
+                        deltas.append((intent.symbol, added))
+                    continue
+                existing = agent_db.get_open_position(intent.symbol)
+                if existing is not None and existing > 0:
+                    removed = reference * intent.quantity if reference is not None else existing
+                    agent_db.reduce_open_position(intent.symbol, removed)
+                    deltas.append((intent.symbol, -removed))
+                    if existing - removed <= 0:
+                        agent_db.record_symbol_exit(intent.symbol, self._as_utc(self._clock()))
+                        stamps.append(intent.symbol)
+                    continue
+                # A SELL that finds no tracked position never stamps an exit,
+                # so a short or a manual position never fabricates a cooldown.
+        except Exception as exc:
+            return tuple(deltas), tuple(stamps), exc
+        return tuple(deltas), tuple(stamps), None
+
+    def _check_loss_containment(self, intent: _Intent, limits: RiskLimits) -> Verdict:
+        """Check 10: the four persisted-counter rules for BUY orders.
+
+        Read-only: it never writes. Enforced for exposure-increasing orders
+        only, and it fails closed when the counter store cannot be read,
+        because an unverifiable budget or exposure is an unknown one.
+        """
+        if not _increases_exposure(intent):
+            return _allowed("Exposure checks apply to orders that add exposure.")
+
+        today = self._as_utc(self._clock()).date().isoformat()
+        try:
+            from database import agent_db
+
+            realised = agent_db.get_daily_realised_pnl(today)
+        except Exception:
+            logger.exception("Agent risk guard could not read the daily realised P&L")
+            return _blocked(
+                RiskCode.STATE_UNAVAILABLE,
+                "The daily realised-P&L counter could not be read, so it cannot be verified "
+                "against the daily loss limit. New exposure is blocked until it is readable.",
+            )
+        if realised <= -limits.max_daily_loss_usd:
+            return _blocked(
+                RiskCode.DAILY_LOSS,
+                f"Realised P&L for the day is {realised:.2f} against a {limits.max_daily_loss_usd} "
+                "loss limit; new exposure is halted for the rest of the UTC day. Reductions "
+                "and closes still pass.",
+                realised_pnl=realised,
+                limit=limits.max_daily_loss_usd,
+            )
+
+        try:
+            from database import agent_db
+
+            last_exit = agent_db.get_symbol_last_exit_at(intent.symbol)
+        except Exception:
+            logger.exception("Agent risk guard could not read the symbol exit stamp")
+            return _blocked(
+                RiskCode.STATE_UNAVAILABLE,
+                "The symbol's last-exit stamp could not be read, so the cooldown cannot be "
+                "verified. New exposure is blocked until it is readable.",
+            )
+        if last_exit is not None and limits.cooldown_minutes > 0:
+            age = self._as_utc(self._clock()) - last_exit
+            if age.total_seconds() < limits.cooldown_minutes * 60:
+                return _blocked(
+                    RiskCode.COOLDOWN,
+                    f"{intent.symbol} exited {age.total_seconds() / 60:.1f} minutes ago; "
+                    f"re-entry is blocked for {limits.cooldown_minutes} minutes after an exit.",
+                    symbol=intent.symbol,
+                    cooldown_minutes=limits.cooldown_minutes,
+                    minutes_since_exit=round(age.total_seconds() / 60, 1),
+                )
+
+        try:
+            from database import agent_db
+
+            existing = agent_db.get_open_position(intent.symbol)
+            open_total = agent_db.total_open_exposure()
+        except Exception:
+            logger.exception("Agent risk guard could not read the tracked open positions")
+            return _blocked(
+                RiskCode.STATE_UNAVAILABLE,
+                "The tracked open positions could not be read, so the position and "
+                "exposure limits cannot be verified. New exposure is blocked until it is readable.",
+            )
+
+        if existing is not None and existing > 0 and not limits.allow_multiple_positions_per_symbol:
+            return _blocked(
+                RiskCode.MAX_POSITION,
+                f"{intent.symbol} already has a tracked open position of {existing:.2f}; "
+                "at most one open position per symbol is allowed unless "
+                "allow_multiple_positions_per_symbol is set.",
+                symbol=intent.symbol,
+                open_notional=existing,
+            )
+
+        reference = intent.reference_price
+        if reference is not None:
+            new_notional = reference * intent.quantity
+            if open_total + new_notional > limits.max_exposure_usd:
+                return _blocked(
+                    RiskCode.EXPOSURE_CAP,
+                    f"Tracked open exposure is {open_total:.2f} and this order adds "
+                    f"{new_notional:.2f}, which would take the total past the {limits.max_exposure_usd} "
+                    "cap.",
+                    open_exposure=open_total,
+                    new_notional=new_notional,
+                    limit=limits.max_exposure_usd,
+                )
+        return _allowed("Loss-containment checks passed.")
+
     def _check_pricing(self, intent: _Intent, limits: RiskLimits, warnings: list[str]) -> Verdict:
-        """Check 10: notional cap and limit-price deviation."""
+        """Check 11: notional cap and limit-price deviation."""
         reference = intent.reference_price
         if reference is None:
+            if _increases_exposure(intent):
+                return _blocked(
+                    RiskCode.PRICE_UNAVAILABLE,
+                    f"No reference price is available for {intent.symbol}, so the notional "
+                    "cap cannot be verified. New exposure is blocked until a price arrives.",
+                    symbol=intent.symbol,
+                )
             message = (
                 f"No reference price for {intent.symbol}, so the notional cap and the "
                 "price-deviation check were skipped."
@@ -1134,6 +1511,14 @@ class RiskGuard:
 
         deviation_price = intent.deviation_price
         if deviation_price is not None and intent.ltp is None:
+            if _increases_exposure(intent):
+                return _blocked(
+                    RiskCode.PRICE_UNAVAILABLE,
+                    f"The last traded price for {intent.symbol} could not be fetched, so "
+                    "the price-deviation check cannot be verified. New exposure is blocked "
+                    "until a price arrives.",
+                    symbol=intent.symbol,
+                )
             message = (
                 f"No last traded price for {intent.symbol}, so the price-deviation "
                 "check was skipped."
@@ -1187,18 +1572,25 @@ class RiskGuard:
         warnings: list[str],
         *,
         label: str,
+        increases_exposure: bool,
     ) -> Verdict:
-        """Check 11: affordability against available funds.
+        """Check 12: affordability against available funds.
 
-        Fails open. Refusing a human-approved order because a funds lookup
-        hiccuped is worse than allowing it: the broker runs its own margin check
-        and rejects what the account cannot carry, so this check is a courtesy
-        that catches the obvious case early.
+        New exposure fails closed when the funds figure is missing: the broker's
+        margin check is not a control the guard may skip. Reductions always
+        pass.
         """
         if required <= 0:
             return _allowed("Affordability check not applicable.")
 
         if available is None:
+            if increases_exposure:
+                return _blocked(
+                    RiskCode.FUNDS_UNAVAILABLE,
+                    f"The available-funds figure for {label} could not be fetched, so "
+                    "affordability cannot be verified. New exposure is blocked until the "
+                    "funds figure arrives.",
+                )
             message = (
                 f"Available funds are unknown, so the affordability check for {label} was skipped."
             )

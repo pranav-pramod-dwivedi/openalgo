@@ -475,7 +475,7 @@ class OrdersToolkit(OpenAlgoToolkit):
                 place_smart_order as place_smart_order_service,
             )
 
-            target = self._whole_number("position_size", position_size, minimum=None)
+            target = self._quantity("position_size", position_size, minimum=None)
             order = self._build_order(
                 symbol=symbol,
                 exchange=exchange,
@@ -1091,7 +1091,7 @@ class OrdersToolkit(OpenAlgoToolkit):
             "symbol": self._required_text("symbol", symbol).upper(),
             "exchange": self._exchange(exchange),
             "action": self._action(action),
-            "quantity": self._whole_number(
+            "quantity": self._quantity(
                 "quantity", quantity, minimum=0 if allow_zero_quantity else 1
             ),
             "product": self._product(product),
@@ -1203,7 +1203,8 @@ class OrdersToolkit(OpenAlgoToolkit):
                 "product",
                 f"{text} is not a product type.",
                 f"Use one of: {', '.join(VALID_PRODUCT_TYPES)}. CNC is delivery in a cash "
-                "segment, NRML carries a derivative overnight, MIS is intraday.",
+                "segment, NRML carries a derivative overnight, MIS is intraday, and "
+                "FUTURES/SPOT are the crypto venues on Binance.",
             )
         return text
 
@@ -1230,20 +1231,26 @@ class OrdersToolkit(OpenAlgoToolkit):
             )
         return text
 
-    def _whole_number(self, field: str, value: Any, *, minimum: int | None) -> int:
-        """Coerce an argument to a whole number of units.
+    def _quantity(self, field: str, value: Any, *, minimum: int | None) -> int | float:
+        """Coerce an argument to a finite, non-negative quantity.
+
+        Fractional sizes (crypto lots) are allowed up to 8 decimal places.
+        Integers are returned unchanged.
 
         Args:
             field: Argument name as the model sees it.
             value: The value supplied.
-            minimum: Smallest permitted value, or None for a signed quantity
-                such as a target position size.
+            minimum: Smallest permitted value, or None for a target position
+                size that may only be negative to express a short when the
+                caller has explicitly allowed it; zero is never tradable
+                quantity.
 
         Returns:
-            The value as an int.
+            The value as an int when whole, otherwise a float.
 
         Raises:
-            RetryAgentRun: When it is not a whole number, or is below the
+            RetryAgentRun: When it is not a finite number, is negative or
+                zero, has more than 8 decimal places, or is below the
                 minimum.
         """
         parsed = _decimal(value)
@@ -1251,24 +1258,40 @@ class OrdersToolkit(OpenAlgoToolkit):
             self.invalid_argument(
                 field,
                 f"{value!r} is not a number.",
-                "Pass a whole number of units, for example 10.",
+                "Pass a positive number of units, for example 10 or 0.001.",
             )
-        if parsed != parsed.to_integral_value():
+        if parsed < 0:
             self.invalid_argument(
                 field,
-                f"{parsed} is not a whole number, and quantities are in units rather than "
-                "fractions.",
-                "Round to a whole number of units. For a derivative it must also be a "
-                "multiple of the contract's lot size, which you look up rather than assume.",
+                f"{parsed} is negative.",
+                "Quantity must be positive. For a short target, use the action "
+                "side (SELL) rather than a negative quantity.",
             )
-        number = int(parsed)
-        if minimum is not None and number < minimum:
+        if parsed == 0 and minimum != 0:
             self.invalid_argument(
                 field,
-                f"{number} is below the smallest permitted value of {minimum}.",
-                "Quantity is a positive whole number of units, never lots and never zero.",
+                "0 is not a tradable quantity.",
+                "Use a positive quantity, or the close_position tool to flatten a position.",
             )
-        return number
+        if parsed.as_tuple().exponent < -8:
+            self.invalid_argument(
+                field,
+                f"{parsed} has more than 8 decimal places.",
+                "Quantities may carry at most 8 decimal places.",
+            )
+        if (
+            minimum is not None
+            and parsed < minimum
+            and parsed == parsed.to_integral_value()
+        ):
+            self.invalid_argument(
+                field,
+                f"{parsed} is below the smallest permitted value of {minimum}.",
+                "Quantity is a positive number of units, never lots.",
+            )
+        if parsed == parsed.to_integral_value():
+            return int(parsed)
+        return float(parsed)
 
     def _money(self, field: str, value: Any) -> float:
         """Coerce a price argument to a non-negative float.

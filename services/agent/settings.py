@@ -98,6 +98,10 @@ KEY_SYMBOL_BLOCKLIST = "symbol_blocklist"
 KEY_MAX_FUNDS_UTILIZATION_PCT = "max_funds_utilization_pct"
 KEY_ALLOW_BULK_DESTRUCTIVE = "allow_bulk_destructive"
 KEY_KILL_SWITCH_FILE = "kill_switch_file"
+KEY_MAX_DAILY_LOSS_USD = "max_daily_loss_usd"
+KEY_COOLDOWN_MINUTES = "cooldown_minutes"
+KEY_MAX_EXPOSURE_USD = "max_exposure_usd"
+KEY_ALLOW_MULTIPLE_POSITIONS_PER_SYMBOL = "allow_multiple_positions_per_symbol"
 
 # The voice surface. Two of these are spoken values and they are deliberately
 # separate: `voice_agent_name` is how a trader addresses the agent all day and
@@ -157,9 +161,15 @@ _SPEC: Mapping[str, _Field] = MappingProxyType(
         KEY_REQUIRE_ANALYZER_MODE: _Field("bool", False),
         KEY_SYSTEM_PROMPT_OVERRIDE: _Field("text", ""),
         KEY_DEFAULT_REASONING_EFFORT: _Field("enum", "off", choices=REASONING_EFFORTS),
-        KEY_MAX_ORDERS_PER_SESSION: _Field("int", 20, minimum=0),
-        KEY_MAX_ORDER_QUANTITY: _Field("int", 10000, minimum=0),
-        KEY_MAX_ORDER_VALUE: _Field("money", Decimal("500000.00"), minimum=Decimal("0")),
+        # Sized for a $100 tradable account: a session is a handful of
+        # human-approved orders, not an automated firehose.
+        KEY_MAX_ORDERS_PER_SESSION: _Field("int", 5, minimum=0),
+        # Sized for a $100 tradable account: one order is never more than a
+        # modest unit count on a small account.
+        KEY_MAX_ORDER_QUANTITY: _Field("int", 100, minimum=0),
+        # Sized for a $100 tradable account: a single order may not exceed the
+        # whole tradable balance.
+        KEY_MAX_ORDER_VALUE: _Field("money", Decimal("100.00"), minimum=Decimal("0")),
         KEY_MAX_PRICE_DEVIATION_PCT: _Field(
             "percent", Decimal("5"), minimum=Decimal("0"), maximum=Decimal("100")
         ),
@@ -171,12 +181,27 @@ _SPEC: Mapping[str, _Field] = MappingProxyType(
         # rows. The blocklist is the targeted tool.
         KEY_SYMBOL_ALLOWLIST: _Field("set", frozenset()),
         KEY_SYMBOL_BLOCKLIST: _Field("set", frozenset()),
+        # Sized for a $100 tradable account: one order may never consume a
+        # quarter of the available cash, leaving room for the rest of the
+        # session's orders.
         KEY_MAX_FUNDS_UTILIZATION_PCT: _Field(
-            "percent", Decimal("100"), minimum=Decimal("0"), maximum=Decimal("100")
+            "percent", Decimal("25"), minimum=Decimal("0"), maximum=Decimal("100")
         ),
         KEY_ALLOW_BULK_DESTRUCTIVE: _Field("bool", False),
         KEY_KILL_SWITCH: _Field("bool", False),
         KEY_KILL_SWITCH_FILE: _Field("text", DEFAULT_KILL_SWITCH_FILE),
+        # Sized for a $100 tradable account: halt new exposure once the day's
+        # realised P&L is worse than a tenth of the account.
+        KEY_MAX_DAILY_LOSS_USD: _Field("money", Decimal("10.00"), minimum=Decimal("0")),
+        # Sized for a $100 tradable account: fifteen minutes before trading a
+        # just-exited symbol again.
+        KEY_COOLDOWN_MINUTES: _Field("int", 15, minimum=0),
+        # Sized for a $100 tradable account: total open notional is capped at the
+        # account itself so the agent can never leverage the account up.
+        KEY_MAX_EXPOSURE_USD: _Field("money", Decimal("100.00"), minimum=Decimal("0")),
+        # Off by default: one open position per symbol is the safe end. An
+        # operator who deliberately pyramids turns this on.
+        KEY_ALLOW_MULTIPLE_POSITIONS_PER_SYMBOL: _Field("bool", False),
         # The voice surface ships off. It needs a second credential and it
         # speaks out loud in a room the operator may not control, so it is the
         # one part of this module a fresh install must ask for.
@@ -257,6 +282,12 @@ class RiskLimits:
             (cancel every order, close every position) are permitted.
         kill_switch_engaged: The stored kill-switch flag, set from the UI.
         kill_switch_file: Path whose existence also engages the kill switch.
+        max_daily_loss_usd: Halt new exposure once the day's realised P&L is
+            at or beyond this loss, in account currency.
+        cooldown_minutes: How long a symbol stays off-limits after an exit.
+        max_exposure_usd: Total open notional may not exceed this.
+        allow_multiple_positions_per_symbol: Permit stacking more than one
+            open position on the same symbol.
     """
 
     trading_enabled: bool
@@ -274,6 +305,10 @@ class RiskLimits:
     allow_bulk_destructive: bool
     kill_switch_engaged: bool
     kill_switch_file: str
+    max_daily_loss_usd: Decimal
+    cooldown_minutes: int
+    max_exposure_usd: Decimal
+    allow_multiple_positions_per_symbol: bool
 
     @property
     def kill_switch_path(self) -> Path:
@@ -314,6 +349,10 @@ class RiskLimits:
             KEY_ALLOW_BULK_DESTRUCTIVE: self.allow_bulk_destructive,
             KEY_KILL_SWITCH: self.kill_switch_engaged,
             KEY_KILL_SWITCH_FILE: self.kill_switch_file,
+            KEY_MAX_DAILY_LOSS_USD: str(self.max_daily_loss_usd),
+            KEY_COOLDOWN_MINUTES: self.cooldown_minutes,
+            KEY_MAX_EXPOSURE_USD: str(self.max_exposure_usd),
+            KEY_ALLOW_MULTIPLE_POSITIONS_PER_SYMBOL: (self.allow_multiple_positions_per_symbol),
         }
 
 
@@ -663,6 +702,10 @@ def _limits_from(typed: Mapping[str, Any]) -> RiskLimits:
         allow_bulk_destructive=bool(typed[KEY_ALLOW_BULK_DESTRUCTIVE]),
         kill_switch_engaged=bool(typed[KEY_KILL_SWITCH]),
         kill_switch_file=str(typed[KEY_KILL_SWITCH_FILE]),
+        max_daily_loss_usd=Decimal(typed[KEY_MAX_DAILY_LOSS_USD]),
+        cooldown_minutes=int(typed[KEY_COOLDOWN_MINUTES]),
+        max_exposure_usd=Decimal(typed[KEY_MAX_EXPOSURE_USD]),
+        allow_multiple_positions_per_symbol=bool(typed[KEY_ALLOW_MULTIPLE_POSITIONS_PER_SYMBOL]),
     )
 
 

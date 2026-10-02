@@ -119,7 +119,18 @@ export function toPath(points: SeriesPoint[]): string {
 
 /** A short, dense sparkline for a card footer. */
 export function sparkPath(closes: number[]): string {
-  return toPath(toPoints(closes.map((close) => ({ timestamp: 0, open: close, high: close, low: close, close, volume: 0 }))))
+  return toPath(
+    toPoints(
+      closes.map((close) => ({
+        timestamp: 0,
+        open: close,
+        high: close,
+        low: close,
+        close,
+        volume: 0,
+      }))
+    )
+  )
 }
 
 export { RANGES }

@@ -1,5 +1,5 @@
-import { money, percent, portfolioStats, signedMoney, type FillRow } from './derive'
 import { EmptyNote } from './components'
+import { type FillRow, money, percent, portfolioStats, signedMoney } from './derive'
 
 /**
  * The portfolio in numbers.

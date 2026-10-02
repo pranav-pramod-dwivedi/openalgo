@@ -34,6 +34,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
+import { useSocketOnline } from '@/hooks/useSocketOnline'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
@@ -104,6 +105,7 @@ export default function TradeBook() {
   const { apiKey, user } = useAuthStore()
   const { isCrypto } = useSupportedExchanges()
   const { socket } = useSocketContext()
+  const isSocketOnline = useSocketOnline(socket)
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [trades, setTrades] = useState<Trade[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -282,8 +284,12 @@ export default function TradeBook() {
       a.href = url
       const filename = `tradebook_${new Date().toISOString().split('T')[0]}.csv`
       a.download = filename
+      document.body.appendChild(a)
       a.click()
-      URL.revokeObjectURL(url)
+      setTimeout(() => {
+        URL.revokeObjectURL(url)
+        a.remove()
+      }, 100)
       showToast.success(`Downloaded ${filename}`, 'clipboard')
     } catch {
       showToast.error('Failed to export CSV', 'system')
@@ -332,7 +338,7 @@ export default function TradeBook() {
           <DataFreshness
             lastUpdated={lastUpdated}
             isRefreshing={isRefreshing}
-            isConnected={socket?.connected}
+            isConnected={isSocketOnline}
           />
           {/* Settings Button */}
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>

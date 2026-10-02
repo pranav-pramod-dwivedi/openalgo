@@ -1,9 +1,13 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
-import { PriceTile } from '../PriceChart'
-import { PnlCalendar } from '../PnlCalendar'
-import { PortfolioChart, type RangeKey } from '../PortfolioChart'
-import { PortfolioFacts } from '../PortfolioFacts'
+import {
+  CapitalSplit,
+  EmptyNote,
+  LoadingNote,
+  StaleNote,
+  UpdatedAt,
+  useSnapshot,
+} from '../components'
 import {
   alerts,
   allocation,
@@ -22,9 +26,12 @@ import {
   toFillRows,
   useNow,
 } from '../derive'
-import { CapitalSplit, EmptyNote, LoadingNote, StaleNote, UpdatedAt, useSnapshot } from '../components'
-import { toAmounts } from '../useWalletSnapshot'
+import { PnlCalendar } from '../PnlCalendar'
+import { PortfolioChart, type RangeKey } from '../PortfolioChart'
+import { PortfolioFacts } from '../PortfolioFacts'
+import { PriceTile } from '../PriceChart'
 import { liveEquity, liveUnrealised, useLiveMarks, useWatchedMarkets } from '../useLiveMarks'
+import { toAmounts } from '../useWalletSnapshot'
 
 export default function OverviewPage() {
   const snapshot = useSnapshot()
@@ -68,7 +75,11 @@ export default function OverviewPage() {
   const dayChange = health.totalRealised + openPnl
 
   return (
-    <div className="content-wrap page-view is-visible" id="quickOverviewPage" data-page="Quick overview">
+    <div
+      className="content-wrap page-view is-visible"
+      id="quickOverviewPage"
+      data-page="Quick overview"
+    >
       <section className="page-intro">
         <div>
           <p className="eyebrow">
@@ -117,7 +128,12 @@ export default function OverviewPage() {
           <Link className="control-button" to="/transactions">
             <span>↗</span> Activity
           </Link>
-          <a className="control-button command-button" href="/api/v1/orderbook" target="_blank" rel="noreferrer">
+          <a
+            className="control-button command-button"
+            href="/api/v1/orderbook"
+            target="_blank"
+            rel="noreferrer"
+          >
             <span>⌘</span> Raw API
           </a>
         </div>
@@ -127,7 +143,11 @@ export default function OverviewPage() {
         <article className="balance-card surface-card">
           <div className="card-topline">
             <span className="card-label">Total balance</span>
-            {isLive ? <span className="live-label"><span className="live-dot" /> Live</span> : null}
+            {isLive ? (
+              <span className="live-label">
+                <span className="live-dot" /> Live
+              </span>
+            ) : null}
           </div>
           <div className="balance-value">
             {totalBalance === null ? '—' : money(totalBalance).replace(/\.\d+$/, '')}
@@ -182,7 +202,9 @@ export default function OverviewPage() {
             {health.exposureShare > 0 ? percent(health.exposureShare) : 'Flat'}
           </div>
           <div className="metric-foot">
-            <span>{health.exposureShare > 0 ? 'Of equity is in open positions' : 'No capital at risk'}</span>
+            <span>
+              {health.exposureShare > 0 ? 'Of equity is in open positions' : 'No capital at risk'}
+            </span>
             <span className="metric-glyph">→</span>
           </div>
         </article>
@@ -206,7 +228,11 @@ export default function OverviewPage() {
               <span className="card-label inverse-label">Autopilot</span>
               <h2>AI trading</h2>
             </div>
-            <a className="more-button inverse-more" href="/agent" aria-label="Open the agent in OpenAlgo">
+            <a
+              className="more-button inverse-more"
+              href="/agent"
+              aria-label="Open the agent in OpenAlgo"
+            >
               <span />
               <span />
               <span />
@@ -232,7 +258,9 @@ export default function OverviewPage() {
             <div>
               <span>Last action</span>
               <strong>{fills.length > 0 ? `${fills.length} fills on record` : 'None'}</strong>
-              <small>{fills.length > 0 ? 'Placed manually, not by the agent' : 'No orders yet'}</small>
+              <small>
+                {fills.length > 0 ? 'Placed manually, not by the agent' : 'No orders yet'}
+              </small>
             </div>
             <div>
               <span>Next review</span>
@@ -241,7 +269,12 @@ export default function OverviewPage() {
             </div>
           </div>
           <div className="ai-actions">
-            <button className="inverse-button" type="button" disabled title="AI trading arrives in the next stage">
+            <button
+              className="inverse-button"
+              type="button"
+              disabled
+              title="AI trading arrives in the next stage"
+            >
               <span className="pause-bars" />
               <span>Pause AI</span>
             </button>
@@ -306,7 +339,9 @@ export default function OverviewPage() {
                           <strong>
                             {qty(Math.abs(position.quantity))} {baseAsset(position.symbol)}
                           </strong>
-                          <small className="muted-line">{position.quantity < 0 ? 'Short' : 'Long'}</small>
+                          <small className="muted-line">
+                            {position.quantity < 0 ? 'Short' : 'Long'}
+                          </small>
                         </td>
                         <td>{money(position.average_price)}</td>
                         <td>{money(value)}</td>
@@ -382,7 +417,11 @@ export default function OverviewPage() {
               <span className="card-label">What matters</span>
               <h2>Portfolio record</h2>
             </div>
-            {isLive ? <span className="live-label"><span className="live-dot" /> Live</span> : null}
+            {isLive ? (
+              <span className="live-label">
+                <span className="live-dot" /> Live
+              </span>
+            ) : null}
           </div>
           <PortfolioFacts
             fills={fills}
@@ -395,7 +434,9 @@ export default function OverviewPage() {
           <div className="signal-list">
             <div className="signal-row">
               <span>Tradable share</span>
-              <strong>{amounts && amounts.equity > 0 ? `${health.cashShare.toFixed(1)}%` : '—'}</strong>
+              <strong>
+                {amounts && amounts.equity > 0 ? `${health.cashShare.toFixed(1)}%` : '—'}
+              </strong>
               <span className="signal-meter">
                 <i style={{ width: `${Math.min(100, Math.max(0, health.cashShare))}%` }} />
               </span>
@@ -424,7 +465,11 @@ export default function OverviewPage() {
           </div>
           <div className="planned-action">
             <span className="card-label">Best / worst open position</span>
-            <strong>{health.best ? `${health.best.symbol} ${percent(health.best.pnlPercent)}` : 'No positions'}</strong>
+            <strong>
+              {health.best
+                ? `${health.best.symbol} ${percent(health.best.pnlPercent)}`
+                : 'No positions'}
+            </strong>
             <small>
               {health.worst
                 ? `Weakest is ${health.worst.symbol} at ${percent(health.worst.pnlPercent)}.`
@@ -563,7 +608,11 @@ export default function OverviewPage() {
                 <span className="card-label">What you hold</span>
                 <h2>Markets</h2>
               </div>
-              {isLive ? <span className="live-label"><span className="live-dot" /> Live</span> : null}
+              {isLive ? (
+                <span className="live-label">
+                  <span className="live-dot" /> Live
+                </span>
+              ) : null}
             </div>
             <div className="pp-tiles">
               {marketSymbols.map((symbol) => (
