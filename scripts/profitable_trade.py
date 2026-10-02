@@ -100,7 +100,13 @@ def _fmt(plan: dict) -> str:
         lines.append("  analyst        : did not answer")
     lines.append(f"  resting exits  : {'attached' if plan.get('brackets_attached') else 'not supported by the paper engine'}")
     lines.append(f"  reasoning      : {plan['reasoning']}")
-    if not plan.get("analyst_available"):
+    if plan.get("analyst_bypassed"):
+        lines.append(
+            "  WARNING        : the analyst was switched off for this plan. Nothing reviewed "
+            "it. It rests on the backtested strategy alone, and the dashboard records it as "
+            "unreviewed."
+        )
+    elif not plan.get("analyst_available"):
         lines.append("  note           : this plan carries no analyst opinion and will be refused on execution.")
     return "\n".join(lines)
 

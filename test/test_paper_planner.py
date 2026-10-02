@@ -326,6 +326,23 @@ def test_execute_refuses_a_refused_plan_and_writes_nothing(paper, monkeypatch):
 
 
 def test_execute_refuses_a_rules_only_plan(paper, monkeypatch):
+    """Without the explicit override, a plan the analyst never saw is refused."""
+    paper.configure()
+    paper.register()
+    paper.use(RISING)
+    monkeypatch.setattr(planner.jev, "ask", lambda *a, **k: None)
+
+    plan = planner.plan(symbols=["BTCUSDT"], allow_rules_only=False)
+    assert plan["refusal_reason"] == planner.ANALYST_UNAVAILABLE
+    assert plan.get("analyst_bypassed") is not True
+
+    result = planner.execute(plan)
+    assert result["executed"] is False
+    assert result["refusal_reason"] == planner.ANALYST_UNAVAILABLE
+
+
+def test_explicit_override_executes_but_is_flagged_as_unreviewed(paper, monkeypatch):
+    """The bypass is allowed only when asked for, and is always labelled."""
     paper.configure()
     paper.register()
     paper.use(RISING)
@@ -333,10 +350,11 @@ def test_execute_refuses_a_rules_only_plan(paper, monkeypatch):
 
     plan = planner.plan(symbols=["BTCUSDT"], allow_rules_only=True)
     assert plan["refusal_reason"] is None
+    assert plan["analyst_available"] is False
+    assert plan["analyst_bypassed"] is True
 
     result = planner.execute(plan)
-    assert result["executed"] is False
-    assert result["refusal_reason"] == planner.ANALYST_UNAVAILABLE
+    assert result["executed"] is True
 
 
 def test_execute_moves_cash_and_writes_a_plan_executed_decision(paper, monkeypatch):

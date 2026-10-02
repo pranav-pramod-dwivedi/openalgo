@@ -534,6 +534,10 @@ def plan(
                 "mode": mode,
                 "considered": considered,
                 "analyst_available": bool((best["jev_verdict"] or {}).get("available")),
+                # Set only by an explicit operator override. The plan still
+                # carries every number and its reasoning, but nothing here
+                # reviewed it, so the journal and the dashboard must say so.
+                "analyst_bypassed": bool(allow_rules_only and not (best["jev_verdict"] or {}).get("available")),
                 "brackets_attached": _brackets_supported(),
                 "cash": cash,
                 "equity": equity,
@@ -550,6 +554,7 @@ def plan(
         mode=mode,
         considered=considered,
         analyst_available=False,
+        analyst_bypassed=False,
         brackets_attached=_brackets_supported(),
         cash=cash,
         equity=equity,
@@ -836,7 +841,7 @@ def execute(plan: dict) -> dict:
             "detail": plan.get("refusal_detail", ""),
             "executed": False,
         }
-    if not plan.get("analyst_available"):
+    if not plan.get("analyst_available") and not plan.get("analyst_bypassed"):
         return {
             "status": "refused",
             "refusal_reason": ANALYST_UNAVAILABLE,
