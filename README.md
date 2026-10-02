@@ -28,6 +28,20 @@ OpenAlgo is no longer just "an API layer in front of your broker." Today it comb
 
 Order workflows from the REST API, hosted strategies, and Flow can use Analyzer Mode before live execution. Analytics pages, dashboards, PnL tracking, latency monitoring, notifications, and MCP reuse the same application services where their specific capabilities apply.
 
+## AI Scalper
+
+An automated AI-driven scalping agent that reads market data and places short-horizon trades through OpenAlgo.
+
+Run it with:
+
+```sh
+uv run python scripts/ai_scalper.py --symbol BTCUSDT --size 0.001 --yes
+```
+
+See [SCALPER.md](SCALPER.md) for full setup and options.
+
+> Warning: testnet fills are not live liquidity and there is no profit guarantee.
+
 ## Video Tutorial
 
 [![What is OpenAlgo](https://img.youtube.com/vi/S5myMo9WUdQ/0.jpg)](https://www.youtube.com/watch?v=S5myMo9WUdQ)
