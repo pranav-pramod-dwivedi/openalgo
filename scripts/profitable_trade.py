@@ -13,6 +13,17 @@ default ``data/paper.db``). No broker, no real funds, no guarantee of profit.
     uv run python scripts/profitable_trade.py --symbol BTCUSDT --max-risk 25 --json
     uv run python scripts/profitable_trade.py --symbol BTCUSDT --max-risk 25 --yes
 
+A position the planner opened is closed by name, on purpose:
+
+    uv run python scripts/profitable_trade.py --close BTCUSDT
+    uv run python scripts/profitable_trade.py --close BTCUSDT --json
+
+``--close`` goes through ``planner.close_position``, which closes the whole
+position at the live mark and journals it. Stops, targets and the max-hold limit
+are enforced automatically by the worker; this is the deliberate exit. The kill
+switch applies to it as it does to everything else, so while trading is halted no
+exit is placed either.
+
 Exit code 0 when a plan was produced, 1 when the planner refused.
 """
 
@@ -44,6 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help=f"risk budget in USD the plan may commit (default {planner.DEFAULT_MAX_RISK:g})",
+    )
+    p.add_argument(
+        "--close",
+        metavar="SYMBOL",
+        help="close one named open paper position now, in full, at the live mark",
     )
     p.add_argument("--json", action="store_true", help="print the plan as JSON")
     p.add_argument(
@@ -111,9 +127,46 @@ def _fmt(plan: dict) -> str:
     return "\n".join(lines)
 
 
+def _fmt_close(record: dict) -> str:
+    """The deliberate exit, written for a trader: what closed, at what price."""
+    if not record.get("executed"):
+        return "\n".join(
+            [
+                "Paper position close (virtual money, no broker)",
+                f"  symbol         : {record.get('symbol', '-')}",
+                f"  not closed     : {record.get('refusal_reason')}",
+                f"  why            : {record.get('detail', '')}",
+                "  no order was placed.",
+            ]
+        )
+    lines = [
+        "Paper position closed (virtual money, no broker)",
+        f"  symbol         : {record['symbol']}",
+        f"  position       : {record['side']} {record['qty']}",
+        f"  entry          : {record['entry']:.4f}",
+        f"  exit price     : {record['exit_price']:.4f}",
+        f"  stop / target  : {record.get('stop_loss')} / {record.get('take_profit')}",
+        f"  reason         : {record['reason']}",
+        f"  p&l (net)      : {record['realized_pnl']:+.4f} USD "
+        f"(gross {record['gross_pnl']:+.4f}, fee {record['fee']:.4f})",
+        f"  strategy       : {record.get('strategy_id') or 'none recorded'}",
+        f"  held           : {record['held_seconds'] / 60.0:.1f} min",
+        f"  cash now       : {record['cash']:.2f} USD",
+    ]
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     db.init()
+
+    if args.close:
+        record = planner.close_position(args.close)
+        if args.json:
+            print(json.dumps({"close": record}, indent=2, default=str))
+        else:
+            print(_fmt_close(record))
+        return 0 if record.get("executed") else 1
 
     symbols = [args.symbol.strip().upper()] if args.symbol else config.load().symbols
     max_risk = args.max_risk if args.max_risk is not None else planner.DEFAULT_MAX_RISK

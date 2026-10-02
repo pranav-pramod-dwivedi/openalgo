@@ -22,6 +22,7 @@ Modes (no flag = the autonomous loop):
     --monitor-seconds   monitor cadence, default 60
     --research-seconds  research cadence, default 300
     --max-risk 5        risk budget in USD the planner may commit (persisted)
+    --close SYMBOL      close one named open position now, at the live mark
 
 No live orders: every fill is simulated and stays in this database. See
 PAPER_TRADING.md.
@@ -35,7 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from services.paper import config, db, engine, worker  # noqa: E402
+from services.paper import config, db, engine, planner, worker  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -73,8 +74,37 @@ def build_parser() -> argparse.ArgumentParser:
             f"(default {worker.DEFAULT_MAX_RISK_USD}, persisted)"
         ),
     )
+    p.add_argument(
+        "--close",
+        metavar="SYMBOL",
+        help="close one named open paper position now, in full, at the live mark",
+    )
     p.add_argument("--quiet", action="store_true", help="suppress per-cycle logging")
     return p
+
+
+def _close(symbol: str) -> int:
+    """Close one named position on purpose and report it plainly.
+
+    The same kill switch applies as everywhere else: halted means no orders, so
+    this refuses and says the position is still open rather than pretending.
+    """
+    record = planner.close_position(symbol)
+    if record.get("executed"):
+        print(
+            f"[paper_worker] closed {record['symbol']} {record['side']} {record['qty']} "
+            f"at {record['exit_price']:.4f} (entry {record['entry']:.4f}), "
+            f"net {record['realized_pnl']:+.4f} USD, cash now {record['cash']:.2f} USD."
+        )
+        return 0
+    if record.get("refusal_reason") == planner.HALTED:
+        print(f"[paper_worker] not closed: {record.get('detail')}")
+        return 1
+    print(
+        f"[paper_worker] not closed: {record.get('refusal_reason')} -- "
+        f"{record.get('detail', '')}"
+    )
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -99,6 +129,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.status:
         print(worker.format_status(worker.status()))
         return 0
+
+    if args.close:
+        return _close(args.close)
 
     if args.halt:
         config.set_halted(True)

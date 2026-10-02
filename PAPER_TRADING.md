@@ -202,6 +202,34 @@ them on its own bar before anything is traded. The proper fix belongs in
 `planner._strategies_for`, which should parse the timeframe out of the id the way
 `engine.parse_strategy_id` does.
 
+## Exits
+
+Every monitoring cycle calls `planner.manage_open_positions()` before it looks
+for new trades. For each open position it reads the live mark and exits when
+
+- the mark reaches the stop-loss, or
+- the mark reaches the take-profit, or
+- the position has been held longer than `max_hold_minutes` (default 15), or
+- the strategy that opened it now signals the opposite direction.
+
+An exit always sells the whole position. `engine.plan_size` is entry sizing and
+shrinks as free cash falls, so using it on the way out would leave most of a
+position open when cash is low. Exits go through `engine._close`, the same
+accounting path as an entry, so cash, realised P&L and fees stay consistent.
+
+There are no resting reduce-only orders. The stop and target live on the
+position row and are checked once per cycle, so a move inside one cycle is not
+caught until the next check.
+
+To exit deliberately:
+
+```bash
+uv run python scripts/profitable_trade.py --close BTCUSDT
+```
+
+The kill switch is authoritative: while halted, no exit is sent either, and the
+status names the positions left unmanaged until `./paper` resumes.
+
 ## Health
 
 Every cycle writes two things.

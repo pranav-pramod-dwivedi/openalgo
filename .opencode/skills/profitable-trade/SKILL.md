@@ -68,6 +68,17 @@ Cover, in this order:
 
 Close by saying this is virtual money, and that a trade can still lose.
 
+## Closing a trade early
+
+If the user asks to exit, close or get out of a position, run:
+
+```bash
+uv run python scripts/profitable_trade.py --close SYMBOL
+```
+
+Report what it closed, the price and the realised result in plain words. Use
+the numbers the command prints; never invent an exit price.
+
 ## Refusals are answers, not failures
 
 Say the reason in one plain sentence and stop. Never try other coins or change

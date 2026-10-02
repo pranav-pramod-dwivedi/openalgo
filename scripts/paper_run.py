@@ -36,6 +36,16 @@ rules (cash, exposure cap, daily loss limit, position size, risk budget), the
 kill switch and the data-freshness check all still apply. A rules-only runner
 is a *less* careful trader, not an unchecked one.
 
+Exits are enforced too
+----------------------
+Every cycle manages open positions **before** it plans anything new, by calling
+``planner.manage_open_positions()``: a stop, a target, the max-hold limit or a
+strategy flip closes the position at its full quantity, journalled as
+``position_exited``. Nothing about this needs the analyst -- the brackets are the
+levels the position was opened with and the mark is a price -- so a rate-limited
+analyst never leaves a position unmanaged. The kill switch still applies: halted
+means no orders at all, exits included.
+
 Arming
 ------
 This runner is autonomous by definition, so it cannot ask before each trade. It
@@ -225,6 +235,8 @@ class RulesOnlyRunner:
         self.cycle = 0
         self.trades_taken = 0
         self.plans_refused = 0
+        self.positions_closed = 0
+        self.last_exits: list[dict] = []
         self.last_result: dict = {}
         self.last_execution: dict = {}
         self.last_refusal_reason = ""
@@ -268,6 +280,33 @@ class RulesOnlyRunner:
             return {}
 
     # ------------------------------------------------------------------ steps
+
+    def _manage_exits(self) -> list[dict]:
+        """Close every open position whose stop, target, max hold or signal fired.
+
+        Runs first in the cycle, before any plan is asked for: an exit that waits
+        for the next entry to be considered is a stop that was not enforced. No
+        analyst is involved, so this works in a run where the analyst is off.
+        """
+        try:
+            exits = planner.manage_open_positions()
+        except Exception as exc:
+            # Exit management failing must not cost the cycle, nor stop a new
+            # trade from being considered.
+            logger.warning("rules-only exit management failed: %s", exc)
+            db.log("exit_management_error", {"cycle": self.cycle, "error": f"{type(exc).__name__}: {exc}"})
+            return []
+        for record in exits:
+            self._log(
+                f"cycle {self.cycle}: closed {record.get('symbol')} {record.get('side')} "
+                f"{record.get('qty')} at {record.get('exit_price')} ({record.get('reason')}), "
+                f"net {record.get('realized_pnl'):+.4f} USD"
+            )
+        if exits:
+            self.positions_closed += len(exits)
+            db.log("positions_closed", {"cycle": self.cycle, "count": len(exits)})
+        self.last_exits = list(exits)
+        return list(exits)
 
     def _trade_plan(self, watchlist: list[str], interval: str) -> dict:
         """Ask for exactly one plan and execute it exactly once, or refuse.
@@ -388,7 +427,27 @@ class RulesOnlyRunner:
 
         # The kill switch is read first, every cycle, before any work.
         if cfg.halted:
-            db.log(KIND_HALTED, {"cycle": cycle_no, "reason": "kill_switch"})
+            # The kill switch is authoritative: no orders at all, exits included,
+            # so any open position is unmanaged until --resume. Named here rather
+            # than left to be discovered.
+            unmanaged = _open_symbols()
+            db.log(
+                KIND_HALTED,
+                {
+                    "cycle": cycle_no,
+                    "reason": "kill_switch",
+                    "open_positions": unmanaged,
+                    "detail": (
+                        "trading is halted, so no exit is placed either; these positions are "
+                        "unmanaged until the runner is resumed"
+                    ),
+                },
+            )
+            if unmanaged:
+                self._log(
+                    f"cycle {cycle_no}: halted, so {len(unmanaged)} open position(s) are "
+                    f"unmanaged until --resume: {','.join(unmanaged)}"
+                )
             self._heartbeat(
                 "halted",
                 planner_verdict="halted",
@@ -397,7 +456,13 @@ class RulesOnlyRunner:
                 duration_s=0.0,
             )
             self._log(f"cycle {cycle_no}: halted, not trading (use --resume)")
-            return {"status": "halted", "cycle": cycle_no, "verdict": VERDICT_NOT_TRADED}
+            return {
+                "status": "halted",
+                "cycle": cycle_no,
+                "verdict": VERDICT_NOT_TRADED,
+                "positions_closed": 0,
+                "unmanaged_positions": unmanaged,
+            }
 
         if not self.armed:
             db.log(KIND_UNARMED, {"cycle": cycle_no})
@@ -420,6 +485,9 @@ class RulesOnlyRunner:
         try:
             engine.research_cycle(watchlist, interval)
             research_ran = True
+            # Exits before entries: manage what is open, then look for something
+            # new. A stop is acted on in this tick, not after the next plan.
+            self._manage_exits()
             self._equity_upkeep()
             outcome = self._trade_plan(watchlist, interval)
             verdict = outcome["verdict"]
@@ -454,6 +522,7 @@ class RulesOnlyRunner:
             analyst_bypassed=True,
             trades_taken_this_run=self.trades_taken,
             plans_refused_this_run=self.plans_refused,
+            positions_closed_this_run=self.positions_closed,
             last_rules_only_cycle=cycle_no,
             max_risk_usd=self.max_risk if self.max_risk is not None else worker_max_risk(),
             last_cycle_started=started,
@@ -461,8 +530,8 @@ class RulesOnlyRunner:
         )
         self._log(
             f"cycle {cycle_no}: {status} in {finished - started:.1f}s "
-            f"(research={'yes' if research_ran else 'no'}, analyst=OFF, "
-            f"planner={verdict or 'none'}) {','.join(watchlist)}"
+            f"(research={'yes' if research_ran else 'no'}, closed={self.positions_closed}, "
+            f"analyst=OFF, planner={verdict or 'none'}) {','.join(watchlist)}"
         )
         summary = {
             "status": status,
@@ -471,6 +540,8 @@ class RulesOnlyRunner:
             "refusal_reason": refusal_reason,
             "trades_taken": self.trades_taken,
             "plans_refused": self.plans_refused,
+            "positions_closed": self.positions_closed,
+            "exits": self.last_exits,
             "analyst_bypassed": True,
             "symbols_scanned": list(watchlist),
             "seconds": round(finished - started, 3),
@@ -504,6 +575,18 @@ class RulesOnlyRunner:
         while True:
             self.run_cycle()
             self.sleep_until_next()
+
+
+def _open_symbols() -> list[str]:
+    """Every symbol currently holding an open paper position."""
+    try:
+        with db.conn() as c:
+            return [
+                str(r["symbol"])
+                for r in c.execute("SELECT symbol FROM positions WHERE status='open'")
+            ]
+    except Exception:
+        return []
 
 
 def worker_max_risk() -> float:
@@ -583,6 +666,7 @@ def status() -> dict:
         "health": health,
         "trades_taken_this_run": health.get("trades_taken_this_run", 0),
         "plans_refused_this_run": health.get("plans_refused_this_run", 0),
+        "positions_closed_this_run": health.get("positions_closed_this_run", 0),
     }
 
 
@@ -607,7 +691,8 @@ def format_status(state: dict) -> str:
         [
             f"  trades taken     : {state['trades_taken']} (journalled as {KIND_EXECUTION})",
             f"  this run         : {state['trades_taken_this_run']} traded, "
-            f"{state['plans_refused_this_run']} refused",
+            f"{state['plans_refused_this_run']} refused, "
+            f"{state['positions_closed_this_run']} closed",
             f"  plans refused    : {state['plans_refused']} (journalled as {KIND_REFUSED})",
             f"  halted cycles    : {state['halted_cycles']}",
             f"  last refusal     : {state['last_refusal_reason'] or 'none'}",

@@ -24,6 +24,24 @@ Autonomous trading no longer reads raw strategy signals. Every cycle asks
 * the planner is called at most once per cycle and a refusal is never retried, so
   one tick can never produce two jobs.
 
+Exit management
+---------------
+Opening a position is only half of a trade, so every cycle manages the other half
+before it plans anything new:
+
+* ``planner.manage_open_positions`` walks **every** open position -- not only the
+  watchlist's -- and closes it when the mark reaches its stop or target, when the
+  max-hold limit is reached, or when the strategy that owns it now signals the
+  other way. It runs before the planner is asked for a plan, so a stop is acted on
+  in the tick it is seen;
+* an exit is always the full position quantity. ``engine.plan_size`` is entry
+  sizing and shrinks with free cash, so using it here would leave a fraction of
+  the position open at exactly the moment the account is least able to fund it;
+* the kill switch stays authoritative: halted means no orders at all, exits
+  included, so a halted worker's open positions are unmanaged until ``--resume``.
+  That is reported every halted cycle (``position_exit_halted`` naming the
+  positions) rather than done quietly.
+
 Concurrency guard
 -----------------
 A research cycle can take much longer than the monitor cadence, so a tick that
@@ -64,6 +82,11 @@ VERDICT_REFUSED = "refused"
 PLANNER_UNAVAILABLE = "planner_unavailable"
 PLANNER_ANALYST_UNAVAILABLE = "analyst_unavailable"
 PLANNER_ERROR = "planner_error"
+
+# The journal kind a halted cycle writes, kept in step with
+# ``planner.KIND_EXIT_HALTED``. Spelled here so a halted cycle can be recorded
+# without importing the planner, which may be missing.
+EXIT_HALTED_KIND = "position_exit_halted"
 
 
 def normalize_max_risk(value) -> float:
@@ -227,6 +250,73 @@ class PaperWorker:
         )
         return {"verdict": VERDICT_EXECUTED, "refusal_reason": "", "execute": result}
 
+    def _manage_exits(self, cycle_no: int) -> list[dict]:
+        """Act on every open position's stop, target, max hold or signal flip.
+
+        Runs before the planner is asked for anything, so a stop is acted on in
+        the same tick it is seen rather than after the next entry has been
+        considered. The kill switch is checked in the cycle above this, and the
+        planner checks it again: halted means no orders at all, exits included,
+        and it says so in the journal rather than leaving a position silently
+        unmanaged.
+        """
+        planner = _load_planner()
+        if planner is None:
+            self._log(f"cycle {cycle_no}: no planner, so open positions are not managed")
+            return []
+        try:
+            exits = planner.manage_open_positions()
+        except Exception as exc:
+            # Exit management failing must not cost the cycle, and must not stop
+            # the planner from being asked for a new trade either.
+            logger.exception("exit management failed on cycle %s", cycle_no)
+            db.log("exit_management_error", {"cycle": cycle_no, "error": f"{type(exc).__name__}: {exc}"})
+            return []
+        for record in exits:
+            self._log(
+                f"cycle {cycle_no}: closed {record.get('symbol')} {record.get('side')} "
+                f"{record.get('qty')} at {record.get('exit_price')} "
+                f"({record.get('reason')}), net {record.get('realized_pnl'):+.4f} USD"
+            )
+        if exits:
+            db.log("positions_closed", {"cycle": cycle_no, "count": len(exits)})
+        return list(exits)
+
+    def _report_unmanaged(self, cycle_no: int) -> list[str]:
+        """Name the positions a halted cycle is leaving alone.
+
+        The kill switch is authoritative: halted means no orders, and an exit is
+        an order. So a halted worker does not manage its open positions -- their
+        stops, targets and max-hold limits all wait -- and this says which
+        positions are waiting, so "halted" never reads as "nothing is open".
+        """
+        try:
+            with db.conn() as c:
+                names = [
+                    str(r["symbol"])
+                    for r in c.execute("SELECT symbol FROM positions WHERE status='open'")
+                ]
+        except Exception:
+            return []
+        if names:
+            db.log(
+                EXIT_HALTED_KIND,
+                {
+                    "cycle": cycle_no,
+                    "reason": "kill_switch",
+                    "open_positions": names,
+                    "detail": (
+                        "trading is halted, so no exit is placed either; these positions are "
+                        "unmanaged until the worker is resumed"
+                    ),
+                },
+            )
+            self._log(
+                f"cycle {cycle_no}: halted, so {len(names)} open position(s) are unmanaged "
+                f"until --resume: {','.join(names)}"
+            )
+        return names
+
     # ------------------------------------------------------------------ cycle
 
     def run_cycle(self) -> dict:
@@ -249,6 +339,7 @@ class PaperWorker:
         self.refresh()
         if self.cfg.halted:
             self.next_cycle_at = started + self.cfg.monitor_seconds
+            unmanaged = self._report_unmanaged(cycle_no)
             self._heartbeat(
                 "halted",
                 planner_verdict="halted",
@@ -266,13 +357,22 @@ class PaperWorker:
                 interval=self.cfg.interval,
                 last_cycle_started=started,
                 last_cycle_seconds=round(time.time() - started, 3),
+                positions_closed=0,
+                unmanaged_positions=unmanaged,
                 last_success=self.last_success or read_health().get("last_success"),
                 next_cycle_at=self.next_cycle_at,
                 next_research_at=self.next_research_at,
                 skipped=True,
             )
             self._log(f"cycle {cycle_no}: halted, not trading")
-            return {"status": "halted", "cycle": cycle_no}
+            return {
+                "status": "halted",
+                "cycle": cycle_no,
+                "exits": [],
+                "positions_closed": 0,
+                # Named rather than hidden: while halted, no position is managed.
+                "unmanaged_positions": unmanaged,
+            }
 
         watchlist = self.cfg.symbols
         interval = self.cfg.interval
@@ -285,6 +385,7 @@ class PaperWorker:
         max_risk = load_max_risk()
         verdict = ""
         refusal_reason = ""
+        exits: list[dict] = []
 
         try:
             if self._research_due(started):
@@ -295,6 +396,9 @@ class PaperWorker:
                 research_ran = True
                 self.next_research_at = self.last_research_at + self.cfg.research_seconds
             t0 = time.time()
+            # Exits first, entries second: an open position's stop is acted on
+            # before anything new is planned, so the bracket is never late.
+            exits = self._manage_exits(cycle_no)
             # The planner is the only path to an order now. engine.trading_cycle
             # is no longer called directly: a raw signal must never be traded.
             outcome = self._run_planner_cycle(watchlist, interval, max_risk, cycle_no)
@@ -336,6 +440,8 @@ class PaperWorker:
             last_monitor_seconds=round(monitor_seconds, 3),
             last_research_seconds=round(research_seconds, 3) if research_ran else None,
             research_ran=research_ran,
+            positions_closed=len(exits),
+            last_exits=[e["symbol"] for e in exits],
             last_success=self.last_success,
             last_monitor_at=self.last_monitor_at,
             last_research_at=self.last_research_at,
@@ -345,8 +451,8 @@ class PaperWorker:
         )
         self._log(
             f"cycle {cycle_no}: {status} in {finished - started:.1f}s "
-            f"(research={'yes' if research_ran else 'no'}, planner={verdict or 'none'}) "
-            f"{','.join(watchlist)}"
+            f"(research={'yes' if research_ran else 'no'}, closed={len(exits)}, "
+            f"planner={verdict or 'none'}) {','.join(watchlist)}"
         )
         return {
             "status": status,
@@ -357,6 +463,8 @@ class PaperWorker:
             "max_risk": max_risk,
             "seconds": round(finished - started, 3),
             "research_ran": research_ran,
+            "exits": exits,
+            "positions_closed": len(exits),
             "error": error,
         }
 
@@ -418,6 +526,8 @@ def status(cfg: PaperConfig | None = None) -> dict:
         "refusal_reason": _hb_field(hb, "refusal_reason")
         or health.get("last_refusal_reason"),
         "last_successful_cycle": health.get("last_success"),
+        "positions_closed": health.get("positions_closed", 0),
+        "unmanaged_positions": health.get("unmanaged_positions", []) or [],
         "next_cycle_at": health.get("next_cycle_at"),
         "next_research_at": health.get("next_research_at"),
     }
@@ -439,6 +549,7 @@ def format_status(state: dict) -> str:
         f"  monitor cadence  : {state['monitor_seconds']}s",
         f"  research cadence : {state['research_seconds']}s",
         f"  max risk         : {state['max_risk']} USD per plan",
+        f"  positions closed : {state.get('positions_closed', 0)} last cycle",
         f"  heartbeat        : {hb.get('status', 'unknown')} at {_fmt_ts(hb.get('ts'))}",
         f"  planner verdict  : {state.get('planner_verdict') or 'none yet'}",
         f"  refusal reason   : {state.get('refusal_reason') or 'none'}",

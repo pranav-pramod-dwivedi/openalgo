@@ -27,7 +27,16 @@ The rules, in the order they are applied:
    refused for insufficient cash, a reached daily loss limit, a hit exposure
    cap, a symbol that is already open, or stale data.
 
-Every refusal is a reason string on the returned plan, never an exception.
+5. **Exits.** A plan that is never closed is not a trade, so this module also
+   owns the way out: :func:`manage_open_positions` runs on every monitoring cycle
+   and closes every open position whose stop, target, max-hold limit or owning
+   strategy has turned against it, and :func:`close_position` is the deliberate
+   one an operator asks for by name. Both go through the engine's own close, so
+   cash, realised P&L and fees move exactly as an entry does.
+
+Every refusal is a reason string on the returned plan, never an exception. An
+exit is likewise a record, never an exception: one bad position row cannot stop
+the others from being managed.
 """
 
 from __future__ import annotations
@@ -38,7 +47,7 @@ import uuid
 
 from utils.logging import get_logger
 
-from . import db, engine, jev
+from . import config, db, engine, jev
 from .strategies import FAMILIES
 
 logger = get_logger(__name__)
@@ -930,7 +939,8 @@ def execute(plan: dict) -> dict:
         "brackets_attached": False,
         "bracket_note": (
             "the paper engine cannot rest reduce-only exits, so the stop and target "
-            "live on the position row and are enforced on the next worker cycle"
+            "live on the position row and are checked by manage_open_positions on "
+            "every worker cycle"
         ),
     }
     recorded = dict(plan)
@@ -942,3 +952,423 @@ def execute(plan: dict) -> dict:
 def _refuse(reason: str, detail: str) -> dict:
     db.log("plan_execute_refused", {"reason": reason, "detail": detail})
     return {"status": "refused", "refusal_reason": reason, "detail": detail, "executed": False}
+
+
+# ---------------------------------------------------------------------- exits
+#
+# Exit accounting convention
+# --------------------------
+# An exit is closed through ``engine._close``, the same function the engine's own
+# signal path uses, rather than through a second implementation written here. That
+# function already holds the one convention this account has:
+#
+#   * closing a long sells, so cash is credited ``price*qty - fee``; covering a
+#     short buys, so cash is debited ``price*qty + fee`` and the entry notional
+#     comes off ``short_margin_locked``;
+#   * ``realized_total`` carries the gross P&L and ``fees_total`` the exit fee, and
+#     the *net* of the two is what the journal and the caller are told;
+#   * an order and a fill row are written for the exit, the fill on the side that
+#     closes the position, and the position row is marked closed.
+#
+# Two things are deliberately NOT done here:
+#
+#   * ``engine.plan_size`` is never used on the way out. It is entry sizing: it
+#     shrinks with the free cash and refuses outright when the balance cannot
+#     fund the configured cap. Running it on an exit would leave a fraction of
+#     the position open (or skip the exit entirely) exactly when the account is
+#     most likely to be short of cash. An exit is always the full position qty.
+#   * no slippage is applied to the exit price. ``engine._close`` takes the price
+#     it is given, and the engine's own caller passes the observed price; so a
+#     stop or target fill happens at that level and everything else at the mark.
+#     The record carries the mark alongside the fill price so a gap is visible.
+#
+# The kill switch is authoritative. A halted account places no orders at all, and
+# an exit is an order, so while the switch is set no open position is managed:
+# stops, targets and the max-hold limit are all left alone until ``--resume``.
+# That is a deliberate choice -- the switch is the operator's "hands off", and an
+# exit that ignores it would be trading against the one instruction that must
+# never be second-guessed -- and it is reported rather than done quietly: a
+# halted cycle writes a decision naming the positions it is not managing, so an
+# open position with nothing watching it is visible instead of merely forgotten.
+
+# Why a position is closed. Named so the worker, the CLI and the tests all read
+# the same word.
+EXIT_STOP = "stop"
+EXIT_TARGET = "target"
+EXIT_MAX_HOLD = "max_hold"
+EXIT_STRATEGY_SIGNAL = "strategy_signal"
+EXIT_MANUAL = "manual"
+EXIT_REASONS = (EXIT_STOP, EXIT_TARGET, EXIT_MAX_HOLD, EXIT_STRATEGY_SIGNAL, EXIT_MANUAL)
+
+# Journal kinds. ``position_exited`` is the record of an exit; the other two are
+# the outcomes that are not an exit and would otherwise be invisible.
+KIND_EXITED = "position_exited"
+KIND_EXIT_SKIPPED = "position_exit_skipped"
+KIND_EXIT_REFUSED = "position_exit_refused"
+KIND_EXIT_HALTED = "position_exit_halted"
+
+# The max-hold limit, in minutes, as a config key of its own so an operator can
+# change it without touching the brackets a plan writes. 15 minutes is roughly
+# three candles on the default 5m timeframe: a position that has not resolved by
+# then is not the trade the backtest described.
+KEY_MAX_HOLD_MINUTES = "max_hold_minutes"
+DEFAULT_MAX_HOLD_MINUTES = 15.0
+
+# Refusal reasons for an exit that was asked for but could not happen.
+SYMBOL_NOT_OPEN = "symbol_not_open"
+HALTED = "kill_switch"
+NO_MARK = "no_mark"
+
+# Below this, a strategy is not re-run for an exit decision: a signal from a
+# handful of bars is noise, and a wrong exit is worse than a late one.
+MIN_SIGNAL_CANDLES = 30
+
+
+def max_hold_seconds(cfg: dict) -> float:
+    """The max-hold limit in seconds, read from the config table."""
+    minutes = _as_float(cfg.get(KEY_MAX_HOLD_MINUTES), DEFAULT_MAX_HOLD_MINUTES)
+    if minutes <= 0:
+        minutes = DEFAULT_MAX_HOLD_MINUTES
+    return minutes * 60.0
+
+
+def _halted() -> bool:
+    """Whether the kill switch is set. Tolerant: a config read failure is not a halt."""
+    try:
+        return bool(config.is_halted())
+    except Exception:
+        logger.warning("could not read the kill switch; treating it as set (no exits)")
+        return True
+
+
+def _open_rows(symbols=None) -> list:
+    """Every open position, not only the watchlist's.
+
+    A symbol that leaves the watchlist while a position is open is still held, so
+    it is still managed: otherwise the position would be orphaned, with a stop on
+    its row and nothing that ever reads it. ``symbols`` narrows the set only when
+    a caller asks for it.
+    """
+    with db.conn() as c:
+        rows = c.execute("SELECT * FROM positions WHERE status='open'").fetchall()
+    if not symbols:
+        return list(rows)
+    wanted = {str(s).strip().upper() for s in symbols}
+    return [r for r in rows if str(r["symbol"]).upper() in wanted]
+
+
+def _live_marks() -> dict:
+    """Marks for every open position, keyed by symbol.
+
+    ``engine.mark_open_positions`` is the engine's own marking pass, so the price
+    an exit decides on is the price the dashboard shows. A failure here is not
+    fatal: the caller falls back to the last mark stored on the row.
+    """
+    try:
+        marked, _unrealized_total = engine.mark_open_positions()
+        return {str(m["symbol"]).upper(): m for m in marked if m.get("symbol")}
+    except Exception:
+        logger.warning("could not mark open positions for exit management")
+        return {}
+
+
+def _mark_for(row, marks: dict) -> tuple[float | None, bool]:
+    """The price to judge this position against, and whether it is live.
+
+    Falls back to the mark stored on the row (or the entry) so a provider outage
+    still lets a bracket be enforced on the last real price, labelled as not live.
+    """
+    key = str(row["symbol"]).upper()
+    marked = marks.get(key)
+    if marked and marked.get("mark") is not None:
+        return float(marked["mark"]), bool(marked.get("mark_live"))
+    fallback = None
+    if "mark" in row.keys() and row["mark"] is not None:
+        fallback = float(row["mark"])
+    if fallback is None:
+        fallback = float(row["entry"])
+    return fallback, False
+
+
+def _opposite_signal(row) -> tuple[str | None, str]:
+    """Whether the position's own strategy now points the other way.
+
+    Returns ``(signal, detail)``. ``signal`` is ``None`` whenever the answer
+    cannot be trusted -- no strategy row, an unknown family, no usable candles --
+    because an exit fired on a guess is worse than no signal exit at all. The
+    strategy id carries the timeframe it was validated on, and it is run on that
+    one: a setup tuned for 15m candles is a different strategy fed 5m ones.
+    """
+    sid = row["strategy_id"]
+    if not sid:
+        return None, "the position records no owning strategy"
+    family, symbol, interval = engine.parse_strategy_id(str(sid))
+    if not family or family not in FAMILIES:
+        return None, f"strategy {sid!r} names no implemented family"
+    with db.conn() as c:
+        registered = c.execute(
+            "SELECT params FROM strategies WHERE id=?", (str(sid),)
+        ).fetchone()
+    if registered is None:
+        return None, f"strategy {sid!r} is no longer registered"
+    try:
+        params = json.loads(registered["params"] or "{}")
+    except (TypeError, ValueError):
+        params = {}
+    candles = engine._candles(symbol or row["symbol"], interval or engine.resolve_interval())
+    if len(candles) < MIN_SIGNAL_CANDLES:
+        return None, f"only {len(candles)} candles for {sid}, so no signal is trusted"
+    try:
+        signal = FAMILIES[family](candles, **params)
+    except Exception as exc:
+        logger.warning("strategy %s could not be re-run for an exit: %s", sid, exc)
+        return None, f"strategy {sid!r} could not be re-run"
+    if signal not in ("BUY", "SELL"):
+        return None, f"{sid} has no signal on the latest candles"
+    return signal, f"{sid} now signals {signal}"
+
+
+def _exit_reason(row, mark: float, cfg: dict, now: float) -> tuple[str | None, float | None, str]:
+    """Why this position should close, and at what price.
+
+    Returns ``(reason, price, detail)``. ``reason is None`` means hold. The order
+    is fixed and deliberate: a stop and a target are the levels the position was
+    opened with and are checked first, then the clock, then the strategy. A
+    bracket the operator can see outranks a judgement the engine makes up.
+    """
+    side = str(row["side"])
+    stop = float(row["sl"]) if row["sl"] is not None else 0.0
+    target = float(row["tp"]) if row["tp"] is not None else 0.0
+
+    # A long is stopped from below and targeted from above; a short is the mirror.
+    if stop > 0 and ((side == "BUY" and mark <= stop) or (side == "SELL" and mark >= stop)):
+        return EXIT_STOP, stop, f"mark {mark:.6f} reached the stop at {stop:.6f}"
+    if target > 0 and ((side == "BUY" and mark >= target) or (side == "SELL" and mark <= target)):
+        return EXIT_TARGET, target, f"mark {mark:.6f} reached the target at {target:.6f}"
+
+    opened = float(row["opened"] or 0.0)
+    limit = max_hold_seconds(cfg)
+    held = now - opened if opened > 0 else 0.0
+    if limit > 0 and held >= limit:
+        return EXIT_MAX_HOLD, mark, f"held {held / 60.0:.1f} min against a {limit / 60.0:.1f} min limit"
+
+    signal, detail = _opposite_signal(row)
+    if signal and signal != side:
+        return EXIT_STRATEGY_SIGNAL, mark, f"{detail}, the position is {side}"
+
+    return None, None, ""
+
+
+def _close_row(row, price: float, reason: str, mark: float, mark_live: bool, detail: str) -> dict:
+    """Close one open position in full and return the record of it.
+
+    The whole row quantity goes out -- never a fraction sized off the free cash
+    -- and the close itself is ``engine._close``, so cash, the realised and fee
+    totals, the margin release, the order and the fill all move by exactly the
+    convention an entry used. This function adds the journal row and the record
+    the caller gets back; it does not reimplement the accounting.
+    """
+    symbol = str(row["symbol"])
+    side = str(row["side"])
+    qty = float(row["qty"])
+    entry = float(row["entry"])
+    strategy_id = row["strategy_id"]
+    held = time.time() - float(row["opened"] or 0.0)
+    gross = (price - entry) * qty if side == "BUY" else (entry - price) * qty
+
+    try:
+        with db.conn() as c:
+            net = engine._close(c, row, price, strategy_id)
+    except Exception as exc:
+        logger.exception("exit of %s failed", symbol)
+        db.log(KIND_EXIT_REFUSED, {"symbol": symbol, "reason": reason, "error": f"{type(exc).__name__}: {exc}"})
+        return {}
+
+    if net is None:
+        # engine._close refused: covering a short would take the balance below
+        # zero. It logged paper_refused itself, so this only names the exit.
+        db.log(
+            KIND_EXIT_REFUSED,
+            {
+                "symbol": symbol,
+                "side": side,
+                "qty": qty,
+                "exit_price": round(price, 6),
+                "reason": reason,
+                "detail": "the close was refused, so the position is still open and still managed",
+                "strategy_id": strategy_id,
+            },
+        )
+        return {}
+
+    cfg = db.get_all()
+    fee = price * qty * engine._fee_rate(cfg)
+    cash, _locked = engine._cash_state(cfg)
+    record = {
+        "status": "closed",
+        "executed": True,
+        "symbol": symbol,
+        "side": side,
+        "qty": qty,
+        "entry": entry,
+        "exit_price": round(price, 6),
+        "mark": round(mark, 6),
+        "mark_live": mark_live,
+        "stop_loss": row["sl"],
+        "take_profit": row["tp"],
+        "reason": reason,
+        "detail": detail,
+        "gross_pnl": round(gross, 6),
+        "fee": round(fee, 8),
+        # Net of the exit fee, which is the figure a reader wants. The engine's
+        # own totals keep gross P&L and fees apart, as they always have.
+        "realized_pnl": round(net, 6),
+        "strategy_id": strategy_id,
+        "held_seconds": round(held, 3),
+        "cash": round(cash, 6),
+    }
+    db.log(KIND_EXITED, dict(record))
+    return record
+
+
+def manage_open_positions(symbols=None) -> list[dict]:
+    """Close every open position whose exit has triggered. Returns one record each.
+
+    This is the other half of the planner and it runs every monitoring cycle,
+    before any new trade is considered: a stop that is only acted on once
+    something else has been planned is not a stop. It walks every open position
+    rather than the watchlist's, so a position whose symbol has been dropped from
+    the watchlist is still managed.
+
+    One bad position -- a missing bracket, an unpriceable mark, a strategy that
+    no longer runs -- is skipped and journalled, never raised: the remaining
+    positions must still be managed.
+    """
+    db.init()
+    db.ensure_column("positions", "mark", "REAL")
+    now = time.time()
+    cfg = db.get_all()
+
+    rows = _open_rows(symbols)
+    if not rows:
+        return []
+
+    if _halted():
+        # Authoritative: no orders at all while halted, exits included. Said out
+        # loud, because it means an open position is unmanaged until --resume.
+        open_names = [str(r["symbol"]) for r in rows]
+        db.log(
+            KIND_EXIT_HALTED,
+            {
+                "reason": HALTED,
+                "open_positions": open_names,
+                "detail": (
+                    "the kill switch is set, so no exit is placed either; these positions "
+                    "are unmanaged until the worker is resumed"
+                ),
+            },
+        )
+        logger.warning(
+            "kill switch is set: %d open position(s) are not being managed until --resume",
+            len(open_names),
+        )
+        return []
+
+    marks = _live_marks()
+    closed: list[dict] = []
+
+    for row in rows:
+        try:
+            mark, mark_live = _mark_for(row, marks)
+            if mark is None or mark <= 0:
+                db.log(
+                    KIND_EXIT_SKIPPED,
+                    {"symbol": row["symbol"], "reason": NO_MARK, "detail": "no price to judge it against"},
+                )
+                continue
+            reason, price, detail = _exit_reason(row, mark, cfg, now)
+            if reason is None:
+                continue
+            record = _close_row(row, float(price), reason, mark, mark_live, detail)
+            if record:
+                closed.append(record)
+        except Exception:
+            # One position must never stop the others from being managed.
+            logger.exception("could not manage the open position %s", row["symbol"])
+            db.log(KIND_EXIT_SKIPPED, {"symbol": row["symbol"], "detail": "managing this position failed"})
+    return closed
+
+
+def close_position(symbol: str, reason: str = EXIT_MANUAL) -> dict:
+    """Close one named position in full, on purpose. Returns the exit record.
+
+    This is the operator's way out and the agent's: a deliberate exit by name,
+    judged by nothing but the live mark, journalled with the reason it was asked
+    for. The kill switch applies here exactly as it does in
+    :func:`manage_open_positions` -- halted means no orders, so this refuses and
+    says so.
+    """
+    db.init()
+    db.ensure_column("positions", "mark", "REAL")
+    wanted = str(symbol or "").strip().upper()
+    if not wanted:
+        return {"status": "refused", "refusal_reason": BAD_REQUEST, "detail": "no symbol was named", "executed": False}
+
+    if _halted():
+        db.log(
+            KIND_EXIT_HALTED,
+            {"symbol": wanted, "reason": HALTED, "detail": "the kill switch is set, so no exit was placed"},
+        )
+        return {
+            "status": "refused",
+            "symbol": wanted,
+            "refusal_reason": HALTED,
+            "executed": False,
+            "detail": (
+                "trading is halted, so no exit was placed either. The position is still "
+                "open and unmanaged; resume the worker first."
+            ),
+        }
+
+    matches = [r for r in _open_rows([wanted]) if str(r["symbol"]).upper() == wanted]
+    if not matches:
+        db.log(
+            KIND_EXIT_REFUSED,
+            {"symbol": wanted, "reason": SYMBOL_NOT_OPEN, "detail": "no open position carries that symbol"},
+        )
+        return {
+            "status": "refused",
+            "symbol": wanted,
+            "refusal_reason": SYMBOL_NOT_OPEN,
+            "executed": False,
+            "detail": f"{wanted} does not hold an open paper position",
+        }
+
+    asked = str(reason or EXIT_MANUAL).strip().lower() or EXIT_MANUAL
+    row = matches[0]
+    mark, mark_live = _mark_for(row, _live_marks())
+    if mark is None or mark <= 0:
+        return {
+            "status": "refused",
+            "symbol": wanted,
+            "refusal_reason": NO_MARK,
+            "executed": False,
+            "detail": f"there is no price for {wanted}, so it was not closed",
+        }
+    record = _close_row(
+        row,
+        mark,
+        asked if asked in EXIT_REASONS else EXIT_MANUAL,
+        mark,
+        mark_live,
+        f"{wanted} was closed by request",
+    )
+    if not record:
+        return {
+            "status": "refused",
+            "symbol": wanted,
+            "refusal_reason": "exit_failed",
+            "executed": False,
+            "detail": f"the close of {wanted} could not be completed, so it is still open",
+        }
+    return record
