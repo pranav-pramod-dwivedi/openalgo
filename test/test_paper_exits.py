@@ -243,11 +243,11 @@ def test_exit_takes_the_full_quantity_even_when_free_cash_is_tiny(paper):
     paper.open_position(entry=100.0, qty=0.01, sl=99.0, tp=101.0)
     paper.mark(98.0)
 
-    # Entry sizing on this balance comes back with a sliver -- roughly one
+    # Entry sizing on this balance comes back with a sliver -- far below one
     # percent of the position -- so sizing an exit with it would leave almost the
     # whole position open. That is the trap, shown rather than asserted.
-    qty_by_entry_rules, _why = engine.plan_size(db.get_all(), 99.0, "SELL")
-    assert qty_by_entry_rules < 0.01 / 2
+    entry_size = engine.plan_size(db.get_all(), 99.0, "SELL", risk_budget=1.0, stop_price=98.0)
+    assert entry_size.qty < 0.01 / 2
 
     exits = planner.manage_open_positions()
 

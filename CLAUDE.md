@@ -607,3 +607,41 @@ whether an AI reviewed it, and what would make it wrong. No status codes, no
 field names, no `analyst_bypassed` in front of a user — the same rule that
 applies to every other message in this repo. Rules live in
 `.opencode/skills/profitable-trade/SKILL.md`.
+
+### The `./paper` wrapper
+
+`./paper` is the whole command surface for a human. It needs no other command,
+and it defaults `PAPER_DB` to the real book itself, so it is the one entry point
+that is safe to run bare:
+
+| Command | What it does |
+| --- | --- |
+| `./paper` | Start everything (and resume it if a `./paper stop` left the switch set), then print status. Starting the worker is the default, **not** a single trade. |
+| `./paper trade` | Make **one** paper trade now. `./paper trade BTCUSDT` names the coin. |
+| `./paper status` | Print what it is doing right now. Changes nothing. |
+| `./paper stop` | Stop trading. Halts the switch and kills the worker. |
+
+**`./paper` on its own places exactly one trade**, starting the worker first if
+it is not already running, then printing a plain summary and exiting.
+`./paper trade` is the same command spelled out.
+
+The rules for that one trade are the ones above and are not relaxed by the
+wrapper:
+
+- One command places **at most one** trade. `planner.plan()` returns one plan or
+  a refusal, never a list, and a refusal ends the command. No walking the
+  watchlist for a coin that will say yes.
+- **The agent may never invent a price, an amount, a probability or a profit
+  figure.** Every number comes from the planner's output; a missing number is
+  reported as missing.
+- **The agent may never call a trade profitable, guaranteed or safe.** Report the
+  risk, the reward, and that a loss is still possible.
+- A trade is placed only by `./paper` (or `./paper trade`), and only one per
+  invocation.
+  Never by hand-written Python, a `curl` to an order endpoint, or any path the
+  planner did not produce.
+
+Engine detail, including the exits enforced every cycle and the sizing rules, is
+in `PAPER_TRADING.md`. `data/paper.db` is live state: a hand-run command must
+point `PAPER_DB` at a scratch file, and the test suite already does this for
+itself via the `isolate_paper_db` fixture in `test/conftest.py`.

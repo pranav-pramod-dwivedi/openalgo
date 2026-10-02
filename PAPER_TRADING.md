@@ -5,6 +5,38 @@ position, fill and P&L it produces is simulated and stored in a local SQLite
 file. See [No live orders](#no-live-orders) - it is not a warning, it is a
 property of the code.
 
+## `data/paper.db` is live state
+
+The default database, `data/paper.db`, is the running paper portfolio: open
+positions, the cash balance, the equity curve and every journal row. It is
+**not** a scratch file and **not** regenerated. Nothing in this repository can
+put back a position that was closed in it, so a command run by hand against it
+changes the operator's book for good.
+
+**Every command you run by hand must point `PAPER_DB` at a scratch file.** Put
+it in front of the command, exactly like this:
+
+```sh
+PAPER_DB=/tmp/scratch-paper.db uv run python scripts/profitable_trade.py --symbol BTCUSDT --max-risk 25 --yes
+```
+
+Running several commands in one shell session? Export it once, then every
+command in that session is safe:
+
+```sh
+export PAPER_DB=/tmp/scratch-paper.db
+```
+
+Leave `PAPER_DB` unset only when you mean the real book: the worker's own
+commands, `./paper`, `./paper status` and `./paper stop`. A thrown-away test,
+a smoke test and a one-off experiment are never that.
+
+The test suite is already protected against this. Any test that imports
+`services.paper` gets its own empty database file in a temporary directory,
+assigned before the test runs and deleted afterwards, so a test cannot reach
+`data/paper.db` even by accident. See the `isolate_paper_db` fixture in
+`test/conftest.py`.
+
 ## Run it
 
 ```sh
@@ -13,10 +45,12 @@ uv run python scripts/paper_worker.py
 
 That is the default: the autonomous loop, running until you stop it with Ctrl+C.
 
-The database defaults to `data/paper.db`. Point it elsewhere with `PAPER_DB`:
+The database defaults to `data/paper.db`, which is live state. Read
+[`data/paper.db` is live state](#datapaperdb-is-live-state) before running
+anything against it. Point it elsewhere with `PAPER_DB`:
 
 ```sh
-PAPER_DB=/tmp/pw.db uv run python scripts/paper_worker.py
+PAPER_DB=/tmp/scratch-paper.db uv run python scripts/paper_worker.py
 ```
 
 Useful while you are setting things up:
@@ -51,8 +85,12 @@ takes effect for a worker started later:
 - A worker that was already inside a research cycle when the flag was set may
   finish that cycle. Halting stops new work; it does not roll back the cycle in
   progress.
-- `--halt` never closes open positions. Paper positions simply stop being
-  managed until `--resume`.
+- `--halt` never closes open positions, and it does not manage them either. See
+  [The kill switch outranks the exits](#the-kill-switch-outranks-the-exits):
+  a halted system leaves its open positions with no stop, no target and no
+  max-hold limit acting on them until `--resume`.
+
+Both of these commands act on the real book, so run them without `PAPER_DB`.
 
 ## Cadences
 
@@ -202,33 +240,162 @@ them on its own bar before anything is traded. The proper fix belongs in
 `planner._strategies_for`, which should parse the timeframe out of the id the way
 `engine.parse_strategy_id` does.
 
+## One command, one trade
+
+`planner.plan()` returns **one** plan, or a refusal. Never a list. It walks the
+watchlist, throws out every candidate that does not qualify, and keeps the single
+best one. Whichever runner asked gets that one plan and can place at most that
+one order:
+
+- The `./paper` console places exactly one trade per invocation and then stops.
+  It is the only command a person needs: bare `./paper` starts the worker if it
+  is not already running, asks for one plan, places it, prints a plain-English
+  summary and exits. `./paper trade` is the same thing spelled out.
+- `scripts/profitable_trade.py` plans once behind a guard that refuses a second
+  attempt, and places only when `--yes` is given.
+- `scripts/paper_run.py` calls the planner exactly once per cycle and executes
+  exactly once. There is no retry and no second call inside a cycle, so one
+  cycle can never place two orders.
+
+The same rule holds when the planner refuses. A refusal ends that command. The
+agent does not walk the watchlist looking for a coin that will say yes, does not
+lower `--max-risk` on its own, and does not retry on a different symbol: a
+refusal is the planner's answer, and answering twice with different coins is the
+same as having no threshold at all.
+
+The one retry that does exist is documented in the agent skill, and only for one
+reason. If the analyst could not be reached, the agent may re-run once with
+`--allow-rules-only`, which plans and places in one go and marks the trade as
+unreviewed. That trade is never described as reviewed.
+
+## Sizing
+
+Size is derived from **risk distance**, not from a fixed quantity:
+
+```
+qty = risk_budget / abs(entry - stop)
+```
+
+The planner computes the distance from the entry to the stop and divides the
+risk budget by it. A wider stop therefore buys a smaller position, which is the
+point: the money at risk is what the budget says it is, rather than what the
+price happened to be.
+
+That number is then **capped**, and a cap can only ever make it smaller:
+
+| Cap | Key | Default | What it bounds |
+| --- | --- | --- | --- |
+| Notional ceiling | `max_position_notional_usd` | 500.0 | The most one position may be **worth**, in USD. Set it to 0 to leave the exposure cap as the only notional ceiling. |
+| Exposure cap | `max_exposure_pct` | 0.5 | Total notional open across all positions, as a share of equity. |
+| Available cash | `cash` (live balance) | 1000.0 | A buy pays notional plus fee out of the same balance; a short posts its whole notional as margin (`short_margin_locked`). |
+| Daily loss | `max_daily_loss` | 20 | Reaching it refuses every new trade for the day. |
+
+The notional cap is in **currency, deliberately**. The old rule was a fixed
+quantity, `max_position_qty` (default 0.01), and 0.01 units is about 840 USD of
+BTC and about 1.18 USD of SOL. A quantity is not comparable across coins, so a
+5 USD risk budget became 0.0024 USD of real risk on one coin and five times the
+intended risk on another, and `risk_usd` rounded to 0.00 in every report that
+printed it. **`max_position_qty` is no longer read at all.** It is still in every
+existing database, but honouring it as a ceiling would preserve exactly the bug
+it caused. Operators who want a per-coin ceiling now state it in currency with
+`max_position_notional_usd`.
+
+Two floors apply after every ceiling, because a position too small to express its
+own edge says nothing: it must still be worth at least
+`MIN_POSITION_NOTIONAL_USD` (10.0) and must still carry at least
+`MIN_RISK_FRACTION` (1%) of the budget. Below either, the planner refuses and
+names the numbers. It never fills a dust position to make a plan succeed.
+
+Quantities are floored to `QTY_DECIMALS` (12), so float rounding can only shrink
+a position, never push the realised risk back over the budget.
+
+An exit is never sized at all. `plan_size` is entry sizing and is not used on
+the way out; an exit is always the full quantity.
+
+The budget arrives from the command line as `--max-risk`, in USD, and defaults
+to `planner.DEFAULT_MAX_RISK` (5.0, the same literal as the engine's
+`DEFAULT_RISK_BUDGET_USD`). Only the user may change it. An agent that lowers it
+to force a trade through has not produced a trade, it has produced a different,
+smaller one.
+
+Every key above lives in the paper database's `config` table, not in code, so an
+operator can change any of them without editing anything:
+
+```sh
+PAPER_DB=/tmp/scratch-paper.db uv run python -c "import sys; sys.path.insert(0,'.'); from services.paper import db; db.init(); db.set_many({'max_position_notional_usd': 250, 'max_daily_loss': 20}); print(db.get_all())"
+```
+
 ## Exits
 
-Every monitoring cycle calls `planner.manage_open_positions()` before it looks
-for new trades. For each open position it reads the live mark and exits when
+Every monitoring cycle calls `planner.manage_open_positions()` **before** it
+looks for new trades, so a stop is acted on in the tick it is seen rather than
+after the next entry has been considered. It walks every open position, not only
+the watchlist's, so a position whose symbol has been dropped from the watchlist
+is still managed rather than orphaned.
+
+For each one it reads the live mark and closes the position when
 
 - the mark reaches the stop-loss, or
 - the mark reaches the take-profit, or
 - the position has been held longer than `max_hold_minutes` (default 15), or
 - the strategy that opened it now signals the opposite direction.
 
-An exit always sells the whole position. `engine.plan_size` is entry sizing and
-shrinks as free cash falls, so using it on the way out would leave most of a
-position open when cash is low. Exits go through `engine._close`, the same
-accounting path as an entry, so cash, realised P&L and fees stay consistent.
+Those four are checked in that order, and it is deliberate: a bracket the
+operator can see outranks a judgement the engine makes up. A fifth reason,
+`manual`, is a deliberate exit asked for by name.
 
-There are no resting reduce-only orders. The stop and target live on the
-position row and are checked once per cycle, so a move inside one cycle is not
-caught until the next check.
+An exit is always the **full position quantity**. `engine.plan_size` is entry
+sizing and shrinks as free cash falls, so sizing an exit from it would leave most
+of a position open exactly when cash is low. Exits go through `engine._close`,
+the same accounting path as an entry, so cash, realised P&L and fees stay
+consistent.
+
+Every one of those exits is **enforced each cycle**, not merely recorded. The
+stop and target are stored on the position row, and that row is what
+`manage_open_positions()` reads on every single monitoring cycle and acts on. One
+bad position is skipped and journalled, never raised, so the remaining positions
+are still managed.
+
+There are no resting reduce-only orders, and nothing watches the price between
+cycles. A move that crosses the stop and comes back inside one cycle is not seen
+until the next check, so the exit price is the mark at that check, not the level
+the mark touched. The default 60s monitor cadence is the worst-case delay.
+
+A strategy signal is only trusted with at least `MIN_SIGNAL_CANDIDLES` (30)
+candles on the timeframe that strategy was validated on. A position with no
+strategy row, an unknown family or too little history is simply held, because an
+exit fired on a guess is worse than a late one.
 
 To exit deliberately:
 
 ```bash
-uv run python scripts/profitable_trade.py --close BTCUSDT
+PAPER_DB=/tmp/scratch-paper.db uv run python scripts/profitable_trade.py --close BTCUSDT
 ```
 
-The kill switch is authoritative: while halted, no exit is sent either, and the
-status names the positions left unmanaged until `./paper` resumes.
+### The kill switch outranks the exits
+
+This is the one place where "stop everything" and "manage what is open" pull
+against each other, and the kill switch wins. While `halted` is set, **no order
+of any kind is placed, an exit included**: `manage_open_positions()` returns
+before it looks at a single position, and `close_position()` refuses by name.
+
+**State this plainly: a halted system leaves its open positions unmanaged.** Their
+stops, targets and max-hold limits all wait. A position can keep moving against
+you, well past the level that would have closed it, for as long as the system
+stays halted. Nothing is closed for you, and nothing is protected.
+
+That is a deliberate choice, not an oversight: an exit is an order, and the
+meaning of a kill switch is that no orders are sent. What the system does about
+it is refuse to be quiet about it. Every halted cycle writes a
+`position_exit_halted` journal row naming the positions it is not managing, logs
+a warning, and the status line names them too, so "halted" never reads as
+"nothing is open".
+
+Resume with `./paper`, or:
+
+```sh
+uv run python scripts/paper_worker.py --resume
+```
 
 ## Health
 
@@ -331,21 +498,26 @@ There is no live-order path anywhere in this system.
 
 If you ever want this to trade real money, that is a different system, and it
 should be built as one rather than by loosening a switch in here.
+
 ## Asking the agent for a trade
 
 `/make-profitable-trade [SYMBOL] [MAX_RISK_USD]` places one paper trade in a
 single request and reports it back in plain English. There is no confirmation
 step: the request is the permission. Rules are in
-`.opencode/skills/profitable-trade/SKILL.md`.
+`.opencode/skills/profitable-trade/SKILL.md`. See
+[One command, one trade](#one-command-one-trade) for what the agent may and may
+not do when it refuses.
 
 When the analyst is rate-limited the planner refuses with
 `analyst_unavailable` and the agent retries exactly once with
 `--allow-rules-only`. That plan carries `analyst_bypassed: true`, which is what
 lets `planner.execute` place it (`execute` refuses a plan that is neither
 analyst-backed nor explicitly bypassed), and the dashboard records it as
-unreviewed. The agent must say so in the report. Every other refusal — no edge,
+unreviewed. The agent must say so in the report. Every other refusal (no edge,
 not enough cash, exposure cap, an open position, the daily loss limit, stale
-data — ends the run in one sentence, with no retry on another symbol.
+data) ends the run in one sentence, with no retry on another symbol.
 
 The planner always re-plans inside `--yes`; there is no path that places an
-order the planner did not produce in that same invocation.
+order the planner did not produce in that same invocation. `MAX_RISK_USD` in
+the request is the risk budget described under
+[Sizing](#sizing); the agent may not choose it.

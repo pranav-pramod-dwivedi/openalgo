@@ -24,6 +24,17 @@ Autonomous trading no longer reads raw strategy signals. Every cycle asks
 * the planner is called at most once per cycle and a refusal is never retried, so
   one tick can never produce two jobs.
 
+One trade per cycle
+-------------------
+The loop may run for hours, but a single cycle places at most one trade
+(``MAX_TRADES_PER_CYCLE``). That is enforced, not assumed: every order goes
+through :meth:`PaperWorker._execute_once`, which counts the orders placed in the
+current cycle and refuses a second with ``too_many_trades_in_cycle`` -- recorded
+in the journal, never sent -- and the counter is reset at the start of each
+cycle. So the next tick can trade again, while no tick can ever trade twice. The
+count is reported as ``trades_placed`` in the cycle summary and in status, so a
+reader can see that a cycle did one thing.
+
 Exit management
 ---------------
 Opening a position is only half of a trade, so every cycle manages the other half
@@ -79,6 +90,10 @@ MAX_MAX_RISK_USD = 1_000_000.0
 VERDICT_EXECUTED = "executed"
 VERDICT_REFUSED = "refused"
 
+# Orders a single cycle may place. One. See the module docstring.
+MAX_TRADES_PER_CYCLE = 1
+TOO_MANY_TRADES = "too_many_trades_in_cycle"
+
 PLANNER_UNAVAILABLE = "planner_unavailable"
 PLANNER_ANALYST_UNAVAILABLE = "analyst_unavailable"
 PLANNER_ERROR = "planner_error"
@@ -133,6 +148,10 @@ class PaperWorker:
         self._verbose = verbose
         self.cfg = cfg or config.load()
         self.cycle = 0
+        # Orders placed by this cycle and by this process, so both the one-trade
+        # rule and the totals are counted rather than assumed.
+        self._cycle_trades = 0
+        self.trades_placed = 0
         self.last_success: float | None = None
         self.last_monitor_at: float | None = None
         self.last_research_at: float | None = None
@@ -198,6 +217,49 @@ class PaperWorker:
         self._log(f"cycle {cycle_no}: planner refused to trade ({reason})")
         return {"verdict": VERDICT_REFUSED, "refusal_reason": reason}
 
+    def _execute_once(self, planner_module, plan: dict, cycle_no: int, symbols: list[str]) -> dict:
+        """The one order this cycle may place.
+
+        Every order the worker places comes through here, and the count is per
+        cycle. A second attempt in the same cycle is refused here, in the
+        journal and in the log, without reaching ``planner.execute`` -- so a
+        cycle cannot place two orders even if a later edit asks it to try again.
+        The next cycle starts with the allowance back.
+        """
+        if self._cycle_trades >= MAX_TRADES_PER_CYCLE:
+            self._log(
+                f"cycle {cycle_no}: refused, this cycle already placed its one trade "
+                "and will not place another"
+            )
+            db.log(
+                "worker_skipped",
+                {
+                    "cycle": cycle_no,
+                    "refusal_reason": TOO_MANY_TRADES,
+                    "symbols": symbols,
+                    "detail": (
+                        f"a cycle places at most {MAX_TRADES_PER_CYCLE} trade; this one "
+                        "had already placed it, so nothing further was sent"
+                    ),
+                },
+            )
+            return {
+                "status": "refused",
+                "executed": False,
+                "refusal_reason": TOO_MANY_TRADES,
+                "detail": "this cycle has already placed its one trade",
+            }
+
+        self._cycle_trades += 1
+        result = planner_module.execute(plan)
+        if isinstance(result, dict) and result.get("executed"):
+            self.trades_placed += 1
+            self._log(
+                f"cycle {cycle_no}: placed 1 trade: {result.get('side')} "
+                f"{result.get('symbol')} qty {result.get('qty')} @ {result.get('price')}"
+            )
+        return result
+
     def _run_planner_cycle(
         self, symbols: list[str], interval: str, max_risk: float, cycle_no: int
     ) -> dict:
@@ -206,19 +268,19 @@ class PaperWorker:
         The planner is called exactly once here. A refusal is final for this
         cycle: no second plan, no retry, so one tick cannot produce two jobs.
         """
-        planner = _load_planner()
-        if planner is None:
+        planner_module = _load_planner()
+        if planner_module is None:
             # No planner means no analyst gate. Refuse rather than trade raw
             # signals: a blind rules-only trade is exactly what this gate exists
             # to prevent.
             return self._skip(PLANNER_UNAVAILABLE, cycle_no, symbols)
 
         try:
-            plan = planner.plan(symbols=symbols, max_risk=max_risk, interval=interval)
+            plan = planner_module.plan(symbols=symbols, max_risk=max_risk, interval=interval)
         except TypeError:
             # Tolerate a planner that does not take the optional keywords yet.
             try:
-                plan = planner.plan(symbols=symbols)
+                plan = planner_module.plan(symbols=symbols)
             except Exception as exc:
                 logger.exception("paper planner failed on cycle %s", cycle_no)
                 return self._skip(f"{PLANNER_ERROR}: {type(exc).__name__}", cycle_no, symbols)
@@ -239,15 +301,19 @@ class PaperWorker:
             return self._skip(PLANNER_ANALYST_UNAVAILABLE, cycle_no, symbols)
 
         try:
-            result = planner.execute(plan)
+            result = self._execute_once(planner_module, plan, cycle_no, symbols)
         except Exception as exc:
             logger.exception("paper planner execute failed on cycle %s", cycle_no)
             return self._skip(f"{PLANNER_ERROR}: {type(exc).__name__}: {exc}", cycle_no, symbols)
 
-        self._log(
-            f"cycle {cycle_no}: planner executed "
-            f"{plan.get('mode', 'scan')} for {','.join(symbols)}"
-        )
+        if isinstance(result, dict) and not result.get("executed"):
+            # The guarded execute refused (its one trade is already spent) or the
+            # planner refused the order. Either way this cycle placed nothing and
+            # the next cycle starts over.
+            return self._skip(
+                str(result.get("refusal_reason") or PLANNER_ERROR), cycle_no, symbols
+            )
+
         return {"verdict": VERDICT_EXECUTED, "refusal_reason": "", "execute": result}
 
     def _manage_exits(self, cycle_no: int) -> list[dict]:
@@ -334,6 +400,9 @@ class PaperWorker:
         started = time.time()
         self.cycle += 1
         cycle_no = self.cycle
+        # The one-trade allowance is per cycle. A long-running worker gets it
+        # back every tick, and never twice in one tick.
+        self._cycle_trades = 0
 
         # The kill switch is read first, every cycle, before any work.
         self.refresh()
@@ -370,6 +439,7 @@ class PaperWorker:
                 "cycle": cycle_no,
                 "exits": [],
                 "positions_closed": 0,
+                "trades_placed": 0,
                 # Named rather than hidden: while halted, no position is managed.
                 "unmanaged_positions": unmanaged,
             }
@@ -441,6 +511,8 @@ class PaperWorker:
             last_research_seconds=round(research_seconds, 3) if research_ran else None,
             research_ran=research_ran,
             positions_closed=len(exits),
+            trades_placed=self._cycle_trades,
+            trades_placed_this_run=self.trades_placed,
             last_exits=[e["symbol"] for e in exits],
             last_success=self.last_success,
             last_monitor_at=self.last_monitor_at,
@@ -461,6 +533,8 @@ class PaperWorker:
             "refusal_reason": refusal_reason,
             "symbols_scanned": list(watchlist),
             "max_risk": max_risk,
+            # Counted, not inferred: 0 or 1, never more, for this cycle.
+            "trades_placed": self._cycle_trades,
             "seconds": round(finished - started, 3),
             "research_ran": research_ran,
             "exits": exits,
@@ -506,6 +580,34 @@ def _hb_field(hb, name: str):
     return hb[name]
 
 
+def last_trade() -> dict | None:
+    """The most recent paper fill: symbol, side, quantity, price and time.
+
+    Read from ``fills``, so it is an order that actually happened rather than an
+    intention. Shown by status so the one-trade-per-cycle rule is visible: each
+    cycle adds at most one of these.
+    """
+    try:
+        with db.conn() as c:
+            row = c.execute(
+                "SELECT symbol, side, qty, price, ts FROM fills ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+    except Exception:
+        return None
+    return dict(row) if row is not None else None
+
+
+def _fmt_trade(row: dict | None) -> str:
+    """One sentence: what was traded, which way, and when."""
+    if not row:
+        return "none yet"
+    verb = "bought" if str(row.get("side", "")).upper() == "BUY" else "sold"
+    return (
+        f"{verb} {float(row.get('qty', 0.0)):.6f} {row.get('symbol')} "
+        f"at {float(row.get('price', 0.0)):.4f}, {_fmt_ts(row.get('ts'))}"
+    )
+
+
 def status(cfg: PaperConfig | None = None) -> dict:
     """Read worker health straight from the database."""
     cfg = cfg or config.load()
@@ -527,6 +629,9 @@ def status(cfg: PaperConfig | None = None) -> dict:
         or health.get("last_refusal_reason"),
         "last_successful_cycle": health.get("last_success"),
         "positions_closed": health.get("positions_closed", 0),
+        "trades_placed_last_cycle": health.get("trades_placed", 0),
+        "trades_placed_this_run": health.get("trades_placed_this_run", 0),
+        "last_trade": last_trade(),
         "unmanaged_positions": health.get("unmanaged_positions", []) or [],
         "next_cycle_at": health.get("next_cycle_at"),
         "next_research_at": health.get("next_research_at"),
@@ -549,6 +654,9 @@ def format_status(state: dict) -> str:
         f"  monitor cadence  : {state['monitor_seconds']}s",
         f"  research cadence : {state['research_seconds']}s",
         f"  max risk         : {state['max_risk']} USD per plan",
+        f"  trades per cycle : at most {MAX_TRADES_PER_CYCLE} - "
+        f"{state.get('trades_placed_last_cycle', 0)} placed last cycle",
+        f"  last trade placed: {_fmt_trade(state.get('last_trade'))}",
         f"  positions closed : {state.get('positions_closed', 0)} last cycle",
         f"  heartbeat        : {hb.get('status', 'unknown')} at {_fmt_ts(hb.get('ts'))}",
         f"  planner verdict  : {state.get('planner_verdict') or 'none yet'}",

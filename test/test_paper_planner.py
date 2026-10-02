@@ -293,19 +293,53 @@ def test_the_model_never_flips_the_direction(paper, monkeypatch):
     assert db.get_margin_locked() > 0
 
 
-def test_risk_budget_shrinks_the_position_but_never_inverts_it(paper, monkeypatch):
+def test_a_budget_too_small_to_trade_is_refused_rather_than_shrunk_to_dust(paper, monkeypatch):
+    """The old behaviour let a 0.001 USD budget open a position risking nothing.
+
+    Shrinking to fit was never the honest answer: the plan claimed a budget it was
+    not using and the resulting risk rounded to 0.00 in every report. Too small to
+    be a trade is a refusal with the numbers that produced it.
+    """
     paper.configure()
     paper.register()
     paper.use(RISING)
     monkeypatch.setattr(planner.jev, "ask", take_answer)
 
-    generous = planner.plan(symbols=["BTCUSDT"], max_risk=1000.0)
-    tight = planner.plan(symbols=["BTCUSDT"], max_risk=0.001)
+    generous = planner.plan(symbols=["BTCUSDT"], max_risk=5.0)
+    dust = planner.plan(symbols=["BTCUSDT"], max_risk=0.001)
+    unfundable = planner.plan(symbols=["BTCUSDT"], max_risk=1000.0)
 
-    assert tight["refusal_reason"] is None
-    assert tight["side"] == generous["side"]
-    assert tight["qty"] < generous["qty"]
-    assert tight["risk_usd"] <= 0.001 + 1e-9
+    assert generous["refusal_reason"] is None
+    assert generous["side"] == "BUY"
+    assert dust["refusal_reason"] == planner.BELOW_MIN_SIZE
+    assert "sizing refused" in dust["refusal_detail"]
+    assert "minimum" in dust["refusal_detail"]
+    # A budget the account cannot fund at all is refused for the same reason,
+    # with the numbers that produced it rather than a position nobody sized.
+    assert unfundable["refusal_reason"] == planner.BELOW_MIN_SIZE
+    assert "at risk against a" in unfundable["refusal_detail"]
+    # Nothing was opened for either.
+    with db.conn() as c:
+        assert c.execute("SELECT COUNT(*) AS n FROM positions").fetchone()["n"] == 0
+
+
+def test_a_budget_raises_the_position_until_the_notional_ceiling_stops_it(paper, monkeypatch):
+    """A bigger budget buys more risk, up to the caps, and never past them."""
+    paper.configure()
+    paper.register()
+    paper.use(RISING)
+    monkeypatch.setattr(planner.jev, "ask", take_answer)
+
+    small = planner.plan(symbols=["BTCUSDT"], max_risk=0.5)
+    large = planner.plan(symbols=["BTCUSDT"], max_risk=1.0)
+
+    assert small["refusal_reason"] is None and large["refusal_reason"] is None
+    assert small["qty"] < large["qty"]
+    assert small["risk_usd"] == pytest.approx(0.5)
+    # One budget's risk is the whole budget. The larger one asks for exactly the
+    # notional ceiling's worth of position, so the ceiling is what binds it.
+    assert large["qty"] * large["entry_price"] == pytest.approx(500.0, rel=1e-6)
+    assert large["risk_usd"] == pytest.approx(1.0)
 
 
 def test_execute_refuses_a_refused_plan_and_writes_nothing(paper, monkeypatch):

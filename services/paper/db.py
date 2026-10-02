@@ -36,7 +36,15 @@ def init():
             "starting_cash": "1000",
             "max_exposure_pct": "0.5",
             "max_daily_loss": "20",
+            # Sizing is done by risk distance (qty = risk_usd / |entry - stop|);
+            # these are ceilings on the result, not the rule. See
+            # ``engine.DEFAULT_MAX_POSITION_NOTIONAL_USD``. ``max_position_qty``
+            # is no longer read for sizing -- a flat coin quantity is exactly the
+            # defect that made risk differ by three orders of magnitude between
+            # BTC and SOL -- so it is only seeded so an installation that already
+            # has the key keeps a value it can see.
             "max_position_qty": "0.01",
+            "max_position_notional_usd": "500",
             "fee_bps": "4",
             "slippage_bps": "2",
             "active": "true",

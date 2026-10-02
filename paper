@@ -1,24 +1,46 @@
 #!/usr/bin/env bash
 # Paper trading - virtual money. Nothing here can reach a broker.
 #
-#   ./paper          set up and start everything, then show what it's doing
-#   ./paper status   what is it doing right now
-#   ./paper trade    make one trade now (optionally: ./paper trade BTC)
-#   ./paper stop     stop trading
+#   ./paper            make one trade, then stop
+#   ./paper status     what it did and what it is doing now
+#   ./paper stop       stop trading
+#   ./paper help       the same three commands, with a word of explanation
 #
-# You do not need to remember any other command. If you want the details,
-# they are in PAPER_TRADING.md.
+# One command, one trade. There is no loop, no second attempt and no walking
+# down a list of coins: each ./paper looks once, places at most one paper trade,
+# prints what it did in plain words and stops.
 
 set -euo pipefail
 
 cd "$(dirname "$0")"
 export PAPER_DB="${PAPER_DB:-data/paper.db}"
-PIDFILE="log/paper_worker.pid"
-LOG="log/paper_worker.log"
+PIDFILE="${PAPER_PIDFILE:-log/paper_worker.pid}"
+LOG="${PAPER_LOG:-log/paper_worker.log}"
 export OPENCODE_API_KEY="${OPENCODE_API_KEY:-}"
 
 say() { printf '\n  %s\n\n' "$*"; }
 die() { printf '\n  %s\n\n' "$1" >&2; exit 1; }
+
+help_text() {
+  cat <<'HELP'
+
+  Paper trading. Virtual money only - no broker is ever contacted.
+
+    ./paper           Make one trade, then stop.
+                      If nothing is worth trading, it says so and stops.
+                      Starts the background worker first if it is not running.
+
+    ./paper status    What it did, what it holds, and the last trade it placed.
+
+    ./paper stop      Stop trading. Nothing is traded until you run ./paper again.
+
+    ./paper help      This text.
+
+  One command places one trade, at most, and then stops. Run it again for
+  another. No real money is involved at any point.
+
+HELP
+}
 
 worker_pid() {
   [ -f "$PIDFILE" ] || return 1
@@ -28,7 +50,9 @@ worker_pid() {
 }
 
 first_time_setup() {
-  [ -d .venv ] || [ -f uv.lock ] || true
+  if [ -d .venv ] && [ -f .env ]; then
+    return 0
+  fi
   say "Setting things up (first run only, this takes a minute)"
   uv sync --quiet
   if [ ! -f .env ]; then
@@ -38,43 +62,50 @@ first_time_setup() {
   mkdir -p log data
 }
 
-# Is the AI reviewer able to answer right now?
-analyst_ok() {
-  uv run python scripts/paper_status.py >/dev/null 2>&1 || true
-  uv run python - <<'PY' >/dev/null 2>&1
-from services.paper import jev
-raise SystemExit(0 if jev.ask("probe", {"t": {"type": "score", "criteria": ["no", "yes"]}}) else 1)
-PY
+# The worker watches the account between commands. Start it here, quietly, so
+# the user never has to learn a second command for it.
+ensure_worker() {
+  command -v uv >/dev/null 2>&1 || die "uv is not installed yet - see https://docs.astral.sh/uv/"
+  first_time_setup
+  worker_pid >/dev/null 2>&1 && return 0
+
+  # Starting is also a resume: a previous ./paper stop left the switch set, and
+  # asking to trade again means the user wants it trading.
+  uv run python scripts/paper_worker.py --resume >/dev/null 2>&1 || true
+  nohup uv run python scripts/paper_worker.py >"$LOG" 2>&1 &
+  printf '%s' "$!" >"$PIDFILE"
+  sleep 3
+  if worker_pid >/dev/null 2>&1; then
+    say "It is now watching the account in the background. This trade below is the only one this command places."
+  else
+    say "The background watcher did not start. The reason is at the end of $LOG. The trade below still goes ahead on its own."
+  fi
 }
 
-start_everything() {
-  mkdir -p log
-  # Starting is also a resume: if a previous ./paper stop left the switch set,
-  # asking to start again means you want it trading.
-  uv run python scripts/paper_worker.py --resume >/dev/null 2>&1 || true
-  if ! pid="$(worker_pid)"; then
-    nohup uv run python scripts/paper_worker.py >"$LOG" 2>&1 &
-    printf '%s' "$!" >"$PIDFILE"
-    sleep 4
+# One trade. Exactly one: profitable_trade.py plans once, places once and exits,
+# and it refuses a second order in the same run.
+one_trade() {
+  ensure_worker
+  # One call site below, and one symbol at most. A bare ./paper leaves the choice
+  # to the planner; ./paper trade SYMBOL narrows it to that one coin.
+  local symbol="" summary
+  if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+    symbol="$1"
   fi
-
-  if pid="$(worker_pid)"; then
-    say "Trading is running (process $pid). It keeps working on its own."
-  else
-    die "It did not start. The reason is at the end of $LOG"
+  set -- --yes --allow-rules-only --plain
+  if [ -n "$symbol" ]; then
+    set -- --symbol "$symbol" "$@"
   fi
-
-  if analyst_ok; then
-    say "The AI reviewer is answering, so every trade is checked by it before it is placed."
-  else
-    say "The AI reviewer is unavailable right now (its free allowance is used up).
-So trading continues WITHOUT the reviewer. Those trades are risk-sized and
-stop-protected, but nothing has double-checked them. Every such trade is
-labelled 'unreviewed' on the dashboard.
-
-It will start using the reviewer again by itself as soon as the allowance
-returns. Nothing to do."
+  # What the user reads is the trade summary and nothing else. The script's own
+  # log chatter - an unreachable reviewer, a provider message - goes to the log
+  # file, because a trader cannot act on a status code.
+  summary="$(mktemp "${TMPDIR:-/tmp}/paper-trade.XXXXXX")"
+  uv run python scripts/profitable_trade.py "$@" >"$summary" 2>>"$LOG" || true
+  cat "$summary"
+  if [ ! -s "$summary" ]; then
+    say "Nothing was sent. The reason is at the end of $LOG"
   fi
+  rm -f "$summary"
 }
 
 show_status() {
@@ -82,24 +113,12 @@ show_status() {
 }
 
 case "${1:-}" in
-  ""|start)
-    command -v uv >/dev/null 2>&1 || die "uv is not installed yet - see https://docs.astral.sh/uv/"
-    first_time_setup
-    start_everything
-    show_status
-    say "Dashboard: http://127.0.0.1:5001/paper"
+  ""|trade)
+    shift 2>/dev/null || true
+    one_trade "$@"
     ;;
   status)
     show_status
-    ;;
-  trade)
-    shift
-    if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
-      uv run python scripts/profitable_trade.py --symbol "$1" --yes
-    else
-      uv run python scripts/profitable_trade.py "$@" --yes
-    fi
-    say "Dashboard: http://127.0.0.1:5001/paper"
     ;;
   stop)
     uv run python scripts/paper_worker.py --halt >/dev/null 2>&1 || true
@@ -109,8 +128,11 @@ case "${1:-}" in
     fi
     say "Stopped. It will not trade again until you run ./paper"
     ;;
+  help|--help|-h)
+    help_text
+    ;;
   *)
-    say "Unknown option '$1'. Try: ./paper    ./paper status    ./paper trade    ./paper stop"
-    exit 1
+    help_text
+    die "There is no '$1'. The commands are: ./paper    ./paper status    ./paper stop"
     ;;
 esac

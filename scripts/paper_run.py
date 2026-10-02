@@ -36,6 +36,15 @@ rules (cash, exposure cap, daily loss limit, position size, risk budget), the
 kill switch and the data-freshness check all still apply. A rules-only runner
 is a *less* careful trader, not an unchecked one.
 
+One trade per cycle
+-------------------
+A cycle plans once and places at most one order, and that is enforced rather
+than assumed. Every order goes through :meth:`RulesOnlyRunner._execute_once`,
+which counts the orders placed in the current cycle and refuses a second with
+``too_many_trades_in_cycle`` -- journalled, never sent -- and the count resets
+at the top of every cycle. The autonomous loop may keep running and keep trading
+once per cycle; a single cycle can never place two.
+
 Exits are enforced too
 ----------------------
 Every cycle manages open positions **before** it plans anything new, by calling
@@ -105,6 +114,10 @@ KEY_ARMED = "rules_only_armed"
 DEFAULT_INTERVAL_SECONDS = 300
 SLEEP_SLICE = 1.0
 MAX_ERROR_LENGTH = 500
+
+# Orders a single cycle may place. One, enforced in ``_execute_once``.
+MAX_TRADES_PER_CYCLE = 1
+TOO_MANY_TRADES = "too_many_trades_in_cycle"
 
 VERDICT_EXECUTED = "executed"
 VERDICT_REFUSED = "refused"
@@ -236,6 +249,9 @@ class RulesOnlyRunner:
         self.trades_taken = 0
         self.plans_refused = 0
         self.positions_closed = 0
+        # Orders placed by the current cycle. The one-trade rule is counted, not
+        # assumed: this resets every cycle and is refused at one.
+        self._cycle_trades = 0
         self.last_exits: list[dict] = []
         self.last_result: dict = {}
         self.last_execution: dict = {}
@@ -308,6 +324,45 @@ class RulesOnlyRunner:
         self.last_exits = list(exits)
         return list(exits)
 
+    def _execute_once(self, plan: dict) -> dict:
+        """The one order this cycle may place.
+
+        Every order the runner places goes through here. The count is per cycle,
+        so a second attempt in the same cycle is refused here -- journalled and
+        reported, never sent to the planner -- and the next cycle starts with the
+        allowance back.
+        """
+        if self._cycle_trades >= MAX_TRADES_PER_CYCLE:
+            detail = (
+                f"a cycle places at most {MAX_TRADES_PER_CYCLE} trade; this one had "
+                "already placed it, so nothing further was sent"
+            )
+            self._log(f"cycle {self.cycle}: refused, this cycle already placed its one trade")
+            self.plans_refused += 1
+            self.last_refusal_reason = TOO_MANY_TRADES
+            db.log(
+                KIND_REFUSED,
+                {
+                    "cycle": self.cycle,
+                    "refusal_reason": TOO_MANY_TRADES,
+                    "detail": detail,
+                    "stage": "execute",
+                    "analyst_bypassed": True,
+                },
+            )
+            return {
+                "status": "refused",
+                "executed": False,
+                "refusal_reason": TOO_MANY_TRADES,
+                "detail": detail,
+            }
+
+        self._cycle_trades += 1
+        result = planner.execute(plan)
+        if isinstance(result, dict) and result.get("executed"):
+            self.trades_taken += 1
+        return result
+
     def _trade_plan(self, watchlist: list[str], interval: str) -> dict:
         """Ask for exactly one plan and execute it exactly once, or refuse.
 
@@ -355,25 +410,25 @@ class RulesOnlyRunner:
         plan["rules_only"] = True
         plan["analyst_note"] = ANALYST_OFF_REASON
 
-        result = planner.execute(plan)
+        result = self._execute_once(plan)
         self.last_execution = result if isinstance(result, dict) else {}
 
-        # The full plan, reasoning included, in the journal. An operator reading
-        # this row later must not have to guess whether anything reviewed it.
-        db.log(
-            KIND_EXECUTION,
-            {
-                "cycle": self.cycle,
-                "analyst_bypassed": True,
-                "analyst_available": False,
-                "analyst_note": ANALYST_OFF_REASON,
-                "plan": plan,
-                "execution": result,
-            },
-        )
-
         if result.get("status") == "filled":
-            self.trades_taken += 1
+            # The full plan, reasoning included, in the journal. An operator
+            # reading this row later must not have to guess whether anything
+            # reviewed it. One row per placed trade: a cycle that placed one
+            # trade writes one of these and nothing else.
+            db.log(
+                KIND_EXECUTION,
+                {
+                    "cycle": self.cycle,
+                    "analyst_bypassed": True,
+                    "analyst_available": False,
+                    "analyst_note": ANALYST_OFF_REASON,
+                    "plan": plan,
+                    "execution": result,
+                },
+            )
             self._log(
                 f"cycle {self.cycle}: UNREVIEWED {result.get('side')} "
                 f"{result.get('symbol')} qty {result.get('qty')} @ {result.get('price')} "
@@ -420,6 +475,9 @@ class RulesOnlyRunner:
         self.cycle += 1
         cycle_no = self.cycle
         db.init()
+        # The one-trade allowance is per cycle: this runner may keep running for
+        # hours, but no single cycle can place two orders.
+        self._cycle_trades = 0
 
         cfg = config.load()
         watchlist = cfg.symbols
@@ -461,6 +519,7 @@ class RulesOnlyRunner:
                 "cycle": cycle_no,
                 "verdict": VERDICT_NOT_TRADED,
                 "positions_closed": 0,
+                "trades_placed": 0,
                 "unmanaged_positions": unmanaged,
             }
 
@@ -474,7 +533,12 @@ class RulesOnlyRunner:
                 duration_s=0.0,
             )
             self._log(f"cycle {cycle_no}: not armed, nothing traded (use --arm or --autonomous)")
-            return {"status": "unarmed", "cycle": cycle_no, "verdict": VERDICT_NOT_TRADED}
+            return {
+                "status": "unarmed",
+                "cycle": cycle_no,
+                "verdict": VERDICT_NOT_TRADED,
+                "trades_placed": 0,
+            }
 
         verdict = ""
         refusal_reason = ""
@@ -521,6 +585,7 @@ class RulesOnlyRunner:
             rules_only=True,
             analyst_bypassed=True,
             trades_taken_this_run=self.trades_taken,
+            trades_placed_last_cycle=self._cycle_trades,
             plans_refused_this_run=self.plans_refused,
             positions_closed_this_run=self.positions_closed,
             last_rules_only_cycle=cycle_no,
@@ -538,6 +603,8 @@ class RulesOnlyRunner:
             "cycle": cycle_no,
             "planner_verdict": verdict or "none",
             "refusal_reason": refusal_reason,
+            # Counted, not inferred: 0 or 1 for this cycle, never more.
+            "trades_placed": self._cycle_trades,
             "trades_taken": self.trades_taken,
             "plans_refused": self.plans_refused,
             "positions_closed": self.positions_closed,
@@ -626,6 +693,37 @@ def _latest_refusal(c) -> tuple[str, str]:
     return str(payload.get("refusal_reason", "")), str(payload.get("detail", ""))
 
 
+def _last_trade(c):
+    """The most recent placed trade, as symbol, side and time.
+
+    Read from the journal this runner writes for each placed trade, so it is a
+    trade that happened. Shown so the one-trade rule is visible at a glance.
+    """
+    row = c.execute(
+        "SELECT ts, payload FROM decisions WHERE kind=? ORDER BY id DESC LIMIT 1",
+        (KIND_EXECUTION,),
+    ).fetchone()
+    if row is None:
+        return "none yet"
+    try:
+        execution = json.loads(row["payload"]).get("execution") or {}
+    except (TypeError, ValueError):
+        return "none yet"
+    side = str(execution.get("side", "")).upper()
+    if side not in ("BUY", "SELL"):
+        # An older row may have been journalled for an attempt that never filled.
+        # It is not a trade, so it is not shown as one.
+        return "none yet"
+    verb = "bought" if side == "BUY" else "sold"
+    try:
+        qty = float(execution.get("qty", 0.0))
+        price = float(execution.get("price", 0.0))
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(row["ts"])))
+    except (TypeError, ValueError):
+        return f"{execution.get('symbol')} at {row['ts']}"
+    return f"{verb} {qty:.6f} {execution.get('symbol')} at {price:.4f}, {stamp}"
+
+
 def status() -> dict:
     """Read the rules-only runner's state straight from the paper database."""
     db.init()
@@ -639,6 +737,7 @@ def status() -> dict:
         refused = _count(c, KIND_REFUSED)
         halted_rows = _count(c, KIND_HALTED)
         reason, detail = _latest_refusal(c)
+        last_trade = _last_trade(c)
     raw_cfg = db.get_all()
     cash = float(raw_cfg.get("cash", raw_cfg.get("starting_cash", engine.DEFAULT_CASH)))
     equity = (
@@ -660,6 +759,9 @@ def status() -> dict:
         "halted_cycles": halted_rows,
         "last_refusal_reason": reason,
         "last_refusal_detail": detail,
+        "trades_per_cycle": MAX_TRADES_PER_CYCLE,
+        "trades_placed_last_cycle": health.get("trades_placed_last_cycle", 0),
+        "last_trade": last_trade,
         "symbols": cfg.symbols,
         "interval": cfg.interval,
         "max_risk": worker_max_risk(),
@@ -689,6 +791,9 @@ def format_status(state: dict) -> str:
         )
     lines.extend(
         [
+            f"  trades per cycle : at most {state['trades_per_cycle']} - "
+            f"{state['trades_placed_last_cycle']} placed last cycle",
+            f"  last trade placed: {state['last_trade']}",
             f"  trades taken     : {state['trades_taken']} (journalled as {KIND_EXECUTION})",
             f"  this run         : {state['trades_taken_this_run']} traded, "
             f"{state['plans_refused_this_run']} refused, "
@@ -776,6 +881,10 @@ def _report_cycle(result: dict, runner: RulesOnlyRunner) -> None:
             f"{execution.get('side')} {execution.get('symbol')} qty {execution.get('qty')} "
             f"@ {execution.get('price')}. No analyst saw it."
         )
+    print(
+        f"[paper_run] this cycle placed {result.get('trades_placed', 0)} trade "
+        f"(at most {MAX_TRADES_PER_CYCLE} per cycle)"
+    )
     print(f"[paper_run] this run: {runner.trades_taken} traded, {runner.plans_refused} refused")
 
 

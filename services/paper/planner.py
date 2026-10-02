@@ -22,10 +22,16 @@ The rules, in the order they are applied:
    trade is refused unless the caller explicitly opts into rules-only. Jev can
    veto a trade; it can never flip the direction, which always comes from the
    strategy function itself.
-4. **Risk.** Sizing comes from :func:`services.paper.engine.plan_size` and the
-   configured caps, bounded further by the caller's risk budget. The plan is
+4. **Risk.** Sizing comes from :func:`services.paper.engine.plan_size`: the
+   quantity is chosen so that hitting the stop costs the risk budget
+   (``qty = risk_usd / |entry - stop|``), and the configured caps -- the cash
+   left, the account's exposure cap, and a per-position notional ceiling -- are
+   ceilings on that number rather than the rule itself. ``risk_usd`` and
+   ``reward_usd`` are then recomputed from the final quantity, so the plan
+   reports the risk the order that gets placed actually carries. The plan is
    refused for insufficient cash, a reached daily loss limit, a hit exposure
-   cap, a symbol that is already open, or stale data.
+   cap, caps that leave a position too small to be worth opening, a symbol that
+   is already open, or stale data.
 
 5. **Exits.** A plan that is never closed is not a trade, so this module also
    owns the way out: :func:`manage_open_positions` runs on every monitoring cycle
@@ -99,15 +105,24 @@ SYMBOL_ALREADY_OPEN = "symbol_already_open"
 STALE_DATA = "stale_data"
 BAD_REQUEST = "bad_request"
 REFUSED_PLAN = "plan_already_refused"
+# The caps left a position too small to be worth opening, and the risk budget
+# cannot be funded into one. Both are refusals on purpose: a plan that quietly
+# traded 0.0024 USD of risk while claiming a 5 USD budget is worse than no trade.
+BELOW_MIN_SIZE = "below_min_size"
+RISK_BUDGET = "risk_budget"
 
 # Refusal reason for each reason engine.plan_size returns, mapped onto the
-# planner's own vocabulary. Anything unmapped is passed through as-is, because
-# the engine's reason is more specific than anything invented here.
+# planner's own vocabulary. Anything unmapped is passed through as-is, because the
+# engine's reason is more specific than anything invented here.
 _SIZE_REFUSALS = {
-    "no_cash": INSUFFICIENT_CASH,
-    "insufficient_cash": INSUFFICIENT_CASH,
-    "capped_by_config": "capped_by_config",
-    "invalid_price": "invalid_price",
+    engine.SIZE_NO_CASH: INSUFFICIENT_CASH,
+    engine.SIZE_INSUFFICIENT_CASH: INSUFFICIENT_CASH,
+    engine.SIZE_EXPOSURE_CAP: EXPOSURE_CAP,
+    engine.SIZE_CAPPED_BY_CONFIG: "capped_by_config",
+    engine.SIZE_INVALID_PRICE: "invalid_price",
+    engine.SIZE_INVALID_BUDGET: RISK_BUDGET,
+    engine.SIZE_ZERO_RISK_DISTANCE: RISK_BUDGET,
+    engine.SIZE_BELOW_MIN_SIZE: BELOW_MIN_SIZE,
 }
 
 
@@ -297,12 +312,19 @@ def _exposure_notional() -> float:
 # ------------------------------------------------------------------- reasoning
 
 
-def _reasoning(symbol, side, setup, facts, verdict, p_take, threshold, qty, entry, stop, target):
+def _reasoning(symbol, side, setup, facts, verdict, p_take, threshold, plan):
     """Plain English built only from the numbers that were actually computed.
 
     Three parts: what the backtest says should happen, what this market's data
-    actually shows, and what would prove the trade wrong.
+    actually shows, and what would prove the trade wrong. It is given the finished
+    plan rather than loose arguments, so the money quoted here is the money the
+    order is placed with -- there is no second place for a quantity to be
+    recomputed and drift.
     """
+    entry = plan["entry_price"]
+    stop = plan["stop_loss"]
+    target = plan["take_profit"]
+    qty = plan["qty"]
     expected = (
         f"The {setup['family']} setup on {symbol} has backtested {setup['metrics']['trades']:g} "
         f"trades for a net {setup['metrics']['net_pnl']:+.2f} USD with a worst drawdown of "
@@ -346,9 +368,9 @@ def _reasoning(symbol, side, setup, facts, verdict, p_take, threshold, qty, entr
             "The analyst did not answer, so this plan carries no model opinion at all."
         )
     model.append(
-        f"Sizing it at {qty:.6f} unit(s) puts the risk at "
-        f"{abs(entry - stop) * qty:.2f} USD against a target worth "
-        f"{abs(target - entry) * qty:.2f} USD."
+        f"Sizing it at {qty:.6f} unit(s) is what makes the stop cost "
+        f"{plan['risk_usd']:.2f} USD against a target worth {plan['reward_usd']:.2f} USD, "
+        f"for {plan['rr']:.2f} times the risk."
     )
 
     invalidation = (
@@ -474,7 +496,8 @@ def plan(
 
     cfg = db.get_all()
     cash = engine.available_cash(cfg)
-    equity = engine.equity_of(cfg, _unrealized())
+    unrealized = _unrealized()
+    equity = engine.equity_of(cfg, unrealized)
     open_symbols = _open_symbols()
     exposure_pct = _as_float(cfg.get("max_exposure_pct"), 0.5)
     exposure_open = _exposure_notional()
@@ -511,7 +534,7 @@ def plan(
             considered.append(_reject(symbol, None, STALE_DATA, stale_detail))
             continue
 
-        for row in _strategies_for(symbol):
+        for row in _strategies_for(symbol, interval):
             candidate, rejection = _candidate(
                 row,
                 symbol,
@@ -550,6 +573,10 @@ def plan(
                 "brackets_attached": _brackets_supported(),
                 "cash": cash,
                 "equity": equity,
+                # Carried so execute() can restate equity from the balance that
+                # actually exists after the fill, rather than reporting the
+                # pre-trade figure next to a post-trade one.
+                "unrealized": unrealized,
                 "risk_budget": budget,
                 "take_threshold": threshold,
             }
@@ -567,6 +594,7 @@ def plan(
         brackets_attached=_brackets_supported(),
         cash=cash,
         equity=equity,
+        unrealized=unrealized,
         risk_budget=budget,
         take_threshold=threshold,
     )
@@ -579,11 +607,41 @@ def _score_of(candidate: dict) -> float:
     return float(verdict.get("p_take") or 0.0)
 
 
-def _strategies_for(symbol: str) -> list:
+def _strategies_for(symbol: str, interval: str | None = None) -> list:
+    """Every active strategy registered for ``symbol``, whatever its id looks like.
+
+    A strategy id is ``<family>-<SYMBOL>-<interval>`` and the interval is part of
+    it, not a note beside it. Matching a strategy to a symbol by taking everything
+    after the first dash could therefore only ever see the legacy
+    ``<family>-<SYMBOL>`` shape and was blind to every strategy registered with
+    the timeframe it was validated on -- which research has written for a long
+    time. Research papered over that by also registering a duplicate "mirror" row
+    under the legacy id, so each symbol had two planable strategies and research
+    was maintaining rows that existed only to be visible. The rows are gone now
+    (``engine.purge_mirror_strategies``); the id is parsed the way the engine
+    parses it, in one place, so there is a single definition of what an id means.
+
+    Rows validated on the timeframe being planned are returned first. That is a
+    preference, not a filter: a strategy validated on another timeframe is still
+    returned rather than silently dropped, and the plan carries the interval it
+    was validated on so a reader can see which is which.
+    """
     with db.conn() as c:
         rows = c.execute("SELECT * FROM strategies WHERE status='active'").fetchall()
-    # Strategy ids are "<family>-<symbol>"; only the configured symbol matters.
-    return [r for r in rows if str(r["id"]).split("-", 1)[-1].upper() == symbol]
+    wanted = str(symbol or "").strip().upper()
+    ranked = []
+    for row in rows:
+        _family, parsed_symbol, parsed_interval = engine.parse_strategy_id(str(row["id"]))
+        if str(parsed_symbol or "").strip().upper() != wanted:
+            continue
+        if parsed_interval == interval:
+            rank = 0  # validated on the timeframe being planned
+        elif parsed_interval is None:
+            rank = 1  # registered before ids carried a timeframe: no claim to match
+        else:
+            rank = 2
+        ranked.append((rank, row))
+    return [row for _rank, row in sorted(ranked, key=lambda pair: pair[0])]
 
 
 def _candidate(
@@ -694,31 +752,9 @@ def _candidate(
     if risk_per_unit <= 0 or entry <= 0:
         return None, _reject(symbol, strategy_id, "invalid_price", "entry or stop resolved to zero")
 
-    qty, why = engine.plan_size(cfg, entry, side)
-    if qty <= 0:
-        return None, _reject(
-            symbol,
-            strategy_id,
-            _SIZE_REFUSALS.get(why, why),
-            f"sizing refused: {why}",
-            metrics=setup["metrics"],
-            cash=cash,
-        )
-
-    # The engine sizes the position; the risk budget may only make it smaller.
-    affordable_risk = budget / risk_per_unit
-    if affordable_risk < qty:
-        qty = affordable_risk
-    if qty <= 0:
-        return None, _reject(
-            symbol,
-            strategy_id,
-            "risk_budget",
-            f"a {budget:.2f} USD risk budget cannot fund one unit at this stop distance",
-            metrics=setup["metrics"],
-        )
-
-    notional = qty * entry
+    # The exposure room is a ceiling the engine sizes inside, and a refusal in its
+    # own right: an account already at its cap cannot open anything, whatever the
+    # risk budget says it could afford.
     room = equity * exposure_pct - exposure_open
     if room <= 0:
         return None, _reject(
@@ -729,6 +765,36 @@ def _candidate(
             f"{exposure_pct * 100:.0f}% cap on {equity:.2f} USD equity",
             metrics=setup["metrics"],
         )
+
+    # One sizing rule: the quantity whose stop costs the risk budget, capped by the
+    # per-position notional ceiling, the exposure room and the cash actually left.
+    # The budget is the intent; a cap may make the position smaller, and if what is
+    # left is too small to be a trade it is refused with the reason rather than
+    # filled as dust.
+    size = engine.plan_size(
+        cfg,
+        entry,
+        side,
+        risk_budget=budget,
+        stop_price=stop,
+        exposure_room=room,
+    )
+    qty = size.qty
+    if qty <= 0:
+        return None, _reject(
+            symbol,
+            strategy_id,
+            _SIZE_REFUSALS.get(size.reason, size.reason),
+            f"sizing refused: {size.detail}",
+            metrics=setup["metrics"],
+            cash=cash,
+            risk_budget=budget,
+        )
+
+    # The engine sized the position; these two checks stay as the planner's own
+    # backstop, so a cap added later cannot quietly let an over-cap or unfunded
+    # position through.
+    notional = qty * entry
     if notional > room:
         return None, _reject(
             symbol,
@@ -737,17 +803,27 @@ def _candidate(
             f"{notional:.2f} USD position exceeds the {room:.2f} USD of exposure room left",
             metrics=setup["metrics"],
         )
-    if entry * qty * (1 + fee_rate) > cash:
+    # A buy has to pay notional plus fee out of the balance; a short only pays the
+    # fee out of it, because the notional is posted as margin -- and plan_size
+    # already refused unless that whole notional was free.
+    cost = entry * qty * ((1 + fee_rate) if side == "BUY" else fee_rate)
+    if cost > cash:
         return None, _reject(
             symbol,
             strategy_id,
             INSUFFICIENT_CASH,
-            f"{cash:.2f} USD available cannot fund {entry * qty * (1 + fee_rate):.2f} USD",
+            f"{cash:.2f} USD available cannot fund {cost:.2f} USD",
             metrics=setup["metrics"],
         )
 
+    # Every figure below is recomputed from the FINAL quantity, after every cap,
+    # so the plan reports the risk the placed order actually carries. risk_usd is
+    # therefore at most the budget and never rounds away to 0.00, and rr is the
+    # multiple the stop and target distances actually imply rather than a ratio of
+    # two rounded dollar figures.
     risk_usd = risk_per_unit * qty
     reward_usd = abs(target - entry) * qty
+    rr = abs(target - entry) / risk_per_unit
     built = _blank(
         symbol=symbol,
         side=side,
@@ -757,8 +833,9 @@ def _candidate(
         take_profit=target,
         risk_usd=round(risk_usd, 6),
         reward_usd=round(reward_usd, 6),
-        rr=round(reward_usd / risk_usd, 4) if risk_usd > 0 else 0.0,
+        rr=round(rr, 4),
         strategy_id=strategy_id,
+        strategy_interval=_strategy_interval(strategy_id),
         metrics=setup["metrics"],
         jev_verdict={k: v for k, v in verdict.items() if k != "raw"},
         strategy_params=setup["params"],
@@ -766,10 +843,21 @@ def _candidate(
         facts=dict(facts),
     )
     built["reasoning"] = _reasoning(
-        symbol, side, setup, facts, built["jev_verdict"], built["jev_verdict"].get("p_take"),
-        threshold, qty, entry, stop, target,
+        symbol,
+        side,
+        setup,
+        facts,
+        built["jev_verdict"],
+        built["jev_verdict"].get("p_take"),
+        threshold,
+        built,
     )
     return built, None
+
+
+def _strategy_interval(strategy_id) -> str | None:
+    """The timeframe a strategy was validated on, or None for a legacy row."""
+    return engine.parse_strategy_id(str(strategy_id))[2]
 
 
 def _state_string(symbol, side, setup, facts, entry, stop, target) -> str:
@@ -824,7 +912,8 @@ def _overall_refusal(considered: list[dict], blocked: bool) -> str:
             return candidate
     if reasons and reasons <= {ANALYST_UNAVAILABLE, LOW_TAKE_PROBABILITY, "no_setup",
                                "insufficient_data", "bad_params", "unknown_family",
-                               "invalid_price", "risk_budget", "capped_by_config"}:
+                               "invalid_price", RISK_BUDGET, BELOW_MIN_SIZE,
+                               "capped_by_config"}:
         return sorted(reasons)[0]
     return NO_EDGE
 
@@ -897,8 +986,10 @@ def execute(plan: dict) -> dict:
             # margin. Both go through db.move_cash, so there is one balance.
             delta = -(entry * qty + fee) if side == "BUY" else (entry * qty - fee)
             new_cash = db.move_cash(delta, c)
+            locked = float(cfg.get("short_margin_locked", 0.0))
             if side == "SELL":
-                db.set_margin(float(cfg.get("short_margin_locked", 0.0)) + entry * qty, c)
+                locked = locked + entry * qty
+                db.set_margin(locked, c)
             order_id = "plan-" + uuid.uuid4().hex[:8]
             now = time.time()
             c.execute(
@@ -919,6 +1010,16 @@ def execute(plan: dict) -> dict:
         logger.exception("planner execute failed for %s", symbol)
         return _refuse("execution_error", f"{type(exc).__name__}: {exc}")
 
+    # Equity after the fill, on the account's own convention:
+    #     equity = cash + unrealized - short_margin_locked
+    # The new position is written at its entry mark, so it contributes exactly
+    # zero unrealized and the open P&L the plan measured carries over untouched.
+    # Reporting the plan's pre-trade equity next to the post-trade cash is what
+    # made a filled position read as "equity 1000, cash 499.80".
+    open_pnl = _as_float(plan.get("unrealized"), 0.0)
+    equity_after = new_cash + open_pnl - locked
+    _record_equity_after_entry()
+
     result = {
         "status": "filled",
         "executed": True,
@@ -929,6 +1030,10 @@ def execute(plan: dict) -> dict:
         "price": entry,
         "fee": round(fee, 8),
         "cash": round(new_cash, 6),
+        "equity": round(equity_after, 6),
+        "short_margin_locked": round(locked, 6),
+        "risk_usd": plan.get("risk_usd"),
+        "reward_usd": plan.get("reward_usd"),
         "stop_loss": stop,
         "take_profit": target,
         "strategy_id": strategy_id,
@@ -944,9 +1049,31 @@ def execute(plan: dict) -> dict:
         ),
     }
     recorded = dict(plan)
+    # The journal row carries the balance as it stands after the fill, so the
+    # numbers in one record describe one moment.
+    recorded["cash"] = round(new_cash, 6)
+    recorded["equity"] = round(equity_after, 6)
+    recorded["unrealized"] = round(open_pnl, 6)
+    recorded["executed"] = True
     recorded["execution"] = {k: v for k, v in result.items() if k != "reasoning"}
     db.log("plan_executed", recorded)
     return result
+
+
+def _record_equity_after_entry() -> None:
+    """Append the equity row for a fresh entry, best effort.
+
+    Only ``engine.trading_cycle`` used to do this, and the worker no longer runs
+    that path: every entry goes through the planner. Without it a filled position
+    left no equity row at all, so the equity curve stalled at the previous value,
+    peak equity never advanced, and the daily-loss guard -- which reads that same
+    table -- stopped seeing the loss it exists to stop. A failure here must never
+    cost a position that is already open, so it is logged and swallowed.
+    """
+    try:
+        engine._record_equity()
+    except Exception:
+        logger.exception("could not record equity after an entry; the position is open")
 
 
 def _refuse(reason: str, detail: str) -> dict:

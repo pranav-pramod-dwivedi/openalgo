@@ -55,6 +55,28 @@ def _net(metrics: str) -> float:
         return float("-inf")
 
 
+def _last_trade(row) -> str:
+    """The most recent fill, in a few words: what, which way, and when.
+
+    Shown so the one-trade rule is visible. A command that places a trade and
+    exits leaves exactly one new line here, so a user can see that a command did
+    one thing and not several.
+    """
+    if row is None:
+        return "none yet"
+    verb = "bought" if str(row["side"]).upper() == "BUY" else "sold"
+    try:
+        qty = float(row["qty"])
+        price = float(row["price"])
+    except (TypeError, ValueError):
+        return f"{row['symbol']} at {row['ts']}"
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(row["ts"])))
+    return (
+        f"{verb} {qty:.6f} {row['symbol']} at {price:.4f}, "
+        f"{stamp} ({_ago(row['ts'])})"
+    )
+
+
 def main() -> int:
     db.init()
     cfg = db.get_all()
@@ -70,6 +92,9 @@ def main() -> int:
         hb = c.execute("SELECT * FROM heartbeat WHERE id=1").fetchone()
         skipped = c.execute(
             "SELECT payload FROM decisions WHERE kind IN ('worker_skipped','plan_refused') ORDER BY ts DESC LIMIT 1"
+        ).fetchone()
+        last_trade = c.execute(
+            "SELECT symbol, side, qty, price, ts FROM fills ORDER BY id DESC LIMIT 1"
         ).fetchone()
 
     equity = None
@@ -95,6 +120,8 @@ def main() -> int:
     else:
         print("  AI reviewer        : not set up, so nothing reviews the trades")
     print(f"  Trading            : {'STOPPED' if halted else 'ON, working on its own'}")
+    print("  One trade each time: every ./paper places one trade, then stops")
+    print(f"  Last trade placed  : {_last_trade(last_trade)}")
     print(f"  Watching           : {', '.join(s.replace('USDT', '') for s in watchlist)}")
     print(f"  Virtual cash       : {cash:,.2f} USD")
     if equity is not None:

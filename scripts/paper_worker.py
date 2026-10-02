@@ -9,11 +9,17 @@ asks for a plan and executes it only when the plan carries no refusal reason
 and the analyst was available. A refused cycle records a ``worker_skipped``
 decision and trades nothing.
 
+**One trade per cycle.** A cycle plans once and places at most one order --
+``services.paper.worker.MAX_TRADES_PER_CYCLE`` -- and the count is reported as
+``trades_placed`` in the cycle summary and in status. ``--once`` is therefore one
+trade at most; the long loop keeps running across cycles, which is the whole
+point of it, but no single cycle can place two.
+
 State lives in the paper database (``PAPER_DB``, default ``data/paper.db``).
 
 Modes (no flag = the autonomous loop):
 
-    --once              run exactly one cycle and exit
+    --once              run exactly one cycle (at most one trade) and exit
     --halt              set the persistent kill switch: stop trading
     --resume            clear the kill switch
     --status            print worker health from the database
@@ -155,6 +161,10 @@ def main(argv: list[str] | None = None) -> int:
                 "[paper_worker] the planner refused this cycle, so nothing was traded. "
                 f"Reason: {result.get('refusal_reason')}"
             )
+        print(
+            f"[paper_worker] one cycle places at most {worker.MAX_TRADES_PER_CYCLE} trade: "
+            f"{result.get('trades_placed', 0)} placed this cycle."
+        )
         print(worker.format_status(worker.status()))
         return 0 if result.get("status") != "error" else 1
 

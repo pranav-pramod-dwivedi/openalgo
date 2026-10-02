@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import uuid
+from typing import NamedTuple
 
 from utils.logging import get_logger
 
@@ -87,38 +89,240 @@ def available_cash(cfg: dict) -> float:
     return cash - locked
 
 
-def plan_size(cfg: dict, price: float, side: str) -> tuple[float, str]:
-    """Size a new position from the configured caps and the cash actually left.
+# ------------------------------------------------------------------- sizing
+#
+# Position sizing
+# --------------
+# A position is sized by *risk distance*, not by a coin quantity:
+#
+#     qty = risk_budget / |entry - stop|
+#
+# so that being stopped costs the intended budget. A flat quantity cannot do that.
+# The same 0.01 units is $840 of BTC and $1.18 of SOL, so the risk actually
+# reachable at the stop differed by three orders of magnitude between coins, and a
+# plan could claim a 5 USD risk budget while standing 0.0024 USD of risk on SOL --
+# risk_usd rounding to 0.00 in every report that printed it.
+#
+# The configured caps are ceilings *on top of* that number, not the sizing rule:
+#
+#   * ``max_position_notional_usd`` -- the most one position may be worth. In
+#     currency, because a quantity is not comparable across coins. The default is
+#     500: half of the default 1000 USD paper account, which is the same
+#     half-the-account ceiling ``max_exposure_pct`` already expresses for the book
+#     as a whole. Set it to 0 to leave the exposure cap as the only notional
+#     ceiling.
+#   * available cash -- a buy pays notional plus fee out of the same balance and a
+#     short posts its whole notional as margin. A position the balance cannot fund
+#     is refused, never quietly shrunk: a strategy the account can no longer afford
+#     is information the operator needs, not something to paper over with dust.
+#   * ``max_exposure_pct`` -- the share of the free balance a caller that names no
+#     exposure room may use (the engine's own signal path), or, for the planner, of
+#     the room left under the account's exposure cap on equity.
+#   * lot/step rounding -- the paper engine has no per-symbol lot or tick rules and
+#     never had any, so nothing rounds the quantity here. Inventing a rounding
+#     rule the broker does not have would put a size in the journal that cannot be
+#     traded; the quantity is floored to QTY_DECIMALS so rounding can only ever
+#     reduce risk, never add it back.
+#
+# ``max_position_qty`` used to be the primary sizing rule. It is deliberately not
+# read any more. The value is persisted in the config table of every existing
+# install, so honouring it as a ceiling would preserve exactly the bug it caused: a
+# 0.01 SOL cap makes a 5 USD risk budget unfundable, and a 0.01 BTC cap permits
+# five times the intended risk. A limit that cannot be stated in the unit the risk
+# is measured in is not a guard. Operators who want a per-coin ceiling now express
+# it in currency with ``max_position_notional_usd``.
+#
+# The minimum, and why it exists: after every ceiling, the position must still be
+# worth at least MIN_POSITION_NOTIONAL_USD and must still carry at least
+# MIN_RISK_FRACTION of the budget. Below either, the account is being asked to open
+# a position too small to express the edge it was sized for, whose P&L rounds to
+# 0.00 and whose round trip is a rounding error against the fees. Those refusals
+# name the numbers; they are never filled as dust.
 
-    Returns ``(qty, reason)``. ``qty == 0`` means take no trade, and ``reason``
-    is written to the decision log so a refusal is visible rather than silent.
+#: The most one position may be worth, in USD, when the config says nothing.
+DEFAULT_MAX_POSITION_NOTIONAL_USD = 500.0
 
-    The configured caps decide the intended size -- exposure on the free balance
-    and the per-position cap -- and the balance then has to fund it. When it
-    cannot, the trade is refused rather than quietly shrunk: a strategy whose own
-    cap the account can no longer afford is information the operator needs, not
-    something to paper over with a dust position.
+#: The risk budget a caller gets when it names none. Same literal as
+#: ``worker.DEFAULT_MAX_RISK_USD``; repeated here because the worker imports this
+#: module and the engine must not import the worker.
+DEFAULT_RISK_BUDGET_USD = 5.0
+
+#: After every ceiling, the position must still risk at least this share of the
+#: budget. One percent of a 5 USD budget is 0.05 USD, which is far enough above a
+#: reported 0.00 to be worth trading and far enough below 5.00 to be a real stop.
+MIN_RISK_FRACTION = 0.01
+
+#: After every ceiling, the position must still be worth at least this much.
+#: 10 USD is 1% of the default 1000 USD account: below it the fill, the P&L and
+#: the fee all round away, so the record of the trade says nothing useful.
+MIN_POSITION_NOTIONAL_USD = 10.0
+
+#: Quantities are floored to this many decimals, so float rounding can only shrink
+#: a position and never push the realised risk back over the budget.
+QTY_DECIMALS = 12
+
+#: The bracket the engine's own signal path writes, as multipliers on the fill
+#: price. Sizing uses the same numbers, so the risk a position was sized for is
+#: the risk its own stop can actually cost.
+LONG_STOP = 0.998
+SHORT_STOP = 1.002
+
+#: Reasons :func:`plan_size` can return. Named so the planner, the journal and the
+#: tests all read the same word. Anything not here is a programming error.
+SIZE_OK = "ok"
+SIZE_INVALID_PRICE = "invalid_price"
+SIZE_NO_CASH = "no_cash"
+SIZE_INVALID_BUDGET = "invalid_risk_budget"
+SIZE_ZERO_RISK_DISTANCE = "zero_risk_distance"
+SIZE_INSUFFICIENT_CASH = "insufficient_cash"
+SIZE_EXPOSURE_CAP = "exposure_cap"
+SIZE_CAPPED_BY_CONFIG = "capped_by_config"
+SIZE_BELOW_MIN_SIZE = "below_min_size"
+
+
+class Size(NamedTuple):
+    """The outcome of sizing one entry: ``(qty, reason, detail)``.
+
+    ``qty == 0`` with ``reason == SIZE_OK`` cannot happen. A non-ok reason always
+    carries a ``detail`` written for the operator, because a refusal nobody can
+    read is indistinguishable from a bug.
+    """
+
+    qty: float
+    reason: str
+    detail: str
+
+
+def _config_float(cfg: dict, key: str, default: float) -> float:
+    """Read a numeric config key, falling back to ``default`` on anything unusable."""
+    try:
+        value = float(cfg.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    return value
+
+
+def _floor_qty(qty: float) -> float:
+    """Floor a quantity so float rounding never adds risk back over the budget."""
+    if qty <= 0:
+        return 0.0
+    return math.floor(qty * 10**QTY_DECIMALS) / 10**QTY_DECIMALS
+
+
+def plan_size(
+    cfg: dict,
+    price: float,
+    side: str,
+    *,
+    risk_budget: float | None = None,
+    stop_price: float | None = None,
+    exposure_room: float | None = None,
+) -> Size:
+    """Size one entry so that hitting its stop costs ``risk_budget``, then cap it.
+
+    ``qty = risk_budget / |price - stop_price|``, then every ceiling is applied as
+    a cap on that number and never as the reason for it. The ceilings are the
+    per-position notional cap, the exposure cap, and the cash actually left; see
+    the sizing notes above for why each one exists.
+
+    A refusal is the normal outcome when the caps cannot leave a position worth
+    trading, and it names the numbers that produced it. Nothing here writes, and
+    nothing here is used on the way out of a position: an exit is always the full
+    quantity, sized by :func:`_close` and not by this function.
     """
     if price <= 0:
-        return 0.0, "invalid_price"
+        return Size(0.0, SIZE_INVALID_PRICE, f"a price of {price} cannot be sized")
     cash = available_cash(cfg)
     if cash <= 0:
-        return 0.0, "no_cash"
-    max_qty = float(cfg.get("max_position_qty", 0.01))
-    exposure = float(cfg.get("max_exposure_pct", 0.5))
-    qty = min(max_qty, max(0.0, cash * exposure) / price)
-    if qty <= 0:
-        return 0.0, "capped_by_config"
-    # What the balance can fund. A buy must also pay the fee out of the same
-    # cash; a short posts the full notional as margin, so the whole notional has
-    # to be free even though only the fee leaves the balance.
-    if side == "BUY":
-        affordable = cash / (price * (1 + _fee_rate(cfg)))
-    else:
-        affordable = cash / price
+        return Size(0.0, SIZE_NO_CASH, f"there is {cash:.2f} USD available to open a position with")
+
+    budget = None
+    distance = None
+    qty = float("inf")
+    if risk_budget is not None:
+        try:
+            budget = float(risk_budget)
+        except (TypeError, ValueError):
+            budget = None
+        if budget is None or budget <= 0:
+            return Size(
+                0.0,
+                SIZE_INVALID_BUDGET,
+                f"a risk budget of {risk_budget!r} is not an amount that can be risked",
+            )
+        distance = abs(price - float(stop_price)) if stop_price is not None else 0.0
+        if distance <= 0:
+            return Size(
+                0.0,
+                SIZE_ZERO_RISK_DISTANCE,
+                "the entry and the stop resolve to the same price, so no budget can size it",
+            )
+        # The sizing rule. Everything below can only make this smaller.
+        qty = budget / distance
+
+    notional_cap = _config_float(
+        cfg, "max_position_notional_usd", DEFAULT_MAX_POSITION_NOTIONAL_USD
+    )
+    if notional_cap > 0:
+        qty = min(qty, notional_cap / price)
+
+    # Exposure. The planner passes the room left under the account's cap on
+    # equity; a caller that passes none falls back to the configured share of the
+    # free balance, which is what this function has always used.
+    from_account_cap = exposure_room is None
+    if from_account_cap:
+        exposure_room = cash * _config_float(cfg, "max_exposure_pct", 0.5)
+    if exposure_room <= 0:
+        if from_account_cap:
+            return Size(
+                0.0,
+                SIZE_CAPPED_BY_CONFIG,
+                "the configured exposure share leaves no room to open a position",
+            )
+        return Size(
+            0.0,
+            SIZE_EXPOSURE_CAP,
+            "open exposure already uses the whole cap, so there is no room for another position",
+        )
+    qty = min(qty, exposure_room / price)
+
+    qty = _floor_qty(qty)
+    notional = qty * price
+
+    # Cash last, because it is the only ceiling that must refuse rather than cap:
+    # a buy has to pay its fee out of the same balance, and a short has to post its
+    # whole notional as margin even though only the fee leaves it.
+    affordable = cash / (price * (1 + _fee_rate(cfg))) if side == "BUY" else cash / price
     if qty > affordable:
-        return 0.0, "insufficient_cash"
-    return qty, "ok"
+        return Size(
+            0.0,
+            SIZE_INSUFFICIENT_CASH,
+            f"{cash:.2f} USD available cannot fund a {notional:.2f} USD position "
+            f"({price:.6f} each, fee included)",
+        )
+
+    if notional < MIN_POSITION_NOTIONAL_USD:
+        return Size(
+            0.0,
+            SIZE_BELOW_MIN_SIZE,
+            f"the caps leave {notional:.2f} USD of position, under the "
+            f"{MIN_POSITION_NOTIONAL_USD:.2f} USD minimum for a trade "
+            f"(cash {cash:.2f} USD, exposure room {exposure_room:.2f} USD, "
+            f"per-position ceiling {notional_cap:.2f} USD)",
+        )
+
+    if budget is not None and distance:
+        risk_usd = distance * qty
+        floor = budget * MIN_RISK_FRACTION
+        if risk_usd < floor:
+            return Size(
+                0.0,
+                SIZE_BELOW_MIN_SIZE,
+                f"the caps leave {risk_usd:.4f} USD at risk against a {budget:.2f} USD "
+                f"budget, under the {MIN_RISK_FRACTION:.0%} "
+                f"({floor:.4f} USD) minimum",
+            )
+    return Size(qty, SIZE_OK, "")
 
 
 class IntervalNotAllowed(ValueError):
@@ -461,7 +665,9 @@ def research_cycle(watchlist=None, interval=None) -> None:
         )
         for sid, entry in registered.items()
     ]
-    rows.extend(_mirror_rows(registered, interval))
+    # Before the write, so a cycle cannot leave a mirror behind for a symbol or a
+    # timeframe it did not research this time.
+    mirrors_removed = purge_mirror_strategies()
     with db.conn() as c:
         for e in experiments:
             c.execute("INSERT OR REPLACE INTO experiments VALUES(?,?,?,?,?,?)", e)
@@ -489,6 +695,7 @@ def research_cycle(watchlist=None, interval=None) -> None:
         "truncated": truncated,
         "cap": cap,
         "rejected": len(failed),
+        "mirror_rows_removed": mirrors_removed,
     }
     if truncated:
         # The cap is a decision the operator made, so the cycle says it happened.
@@ -518,62 +725,39 @@ def _better(metrics: dict, incumbent: dict) -> bool:
     return int(metrics.get("trades", 0)) > int(incumbent.get("trades", 0))
 
 
-def _mirror_rows(registered: dict, trading_interval: str) -> list:
-    """Symbol-level rows in the legacy ``family-SYMBOL`` shape, for the planner.
+def purge_mirror_strategies() -> int:
+    """Delete the legacy symbol-level mirror rows. Idempotent; returns the count.
 
-    ``planner._strategies_for`` matches a strategy to a symbol by taking
-    everything after the first dash of its id, so a row carrying a timeframe in
-    its id is invisible to it. planner.py is not owned here and was not changed,
-    so the best validated strategy per family and symbol is also written under
-    the legacy id, preferring the timeframe the worker actually trades. These
-    rows carry the same metrics and are re-validated by the planner on its own
-    bar before anything is traded.
+    Research used to write a duplicate of the best validated strategy per family
+    and symbol under the legacy ``family-SYMBOL`` id, because the planner matched
+    a strategy to a symbol by taking everything after the first dash of its id and
+    so could not see an id carrying a timeframe (``donchian-BTCUSDT-15m``). The
+    planner parses the timeframe out of the id now, the way
+    :func:`parse_strategy_id` does, so the workaround is not merely unnecessary:
+    every mirror row was a second strategy the planner could plan with, under an
+    id that said nothing about the resolution it was validated on.
+
+    Only rows carrying the ``research-symbol-mirror`` marker are touched, so a
+    strategy research registered is never at risk. It is called from the research
+    cycle, which is where those rows used to be written and where a cycle can
+    therefore be sure the table holds nothing but real, timeframe-bound
+    strategies. It runs before the new rows are written rather than after, so a
+    cycle cannot leave a stale mirror behind for a symbol it did not research this
+    time.
     """
-    best: dict[tuple[str, str], dict] = {}
-    for entry in registered.values():
-        key = (entry["family"], entry["symbol"])
-        current = best.get(key)
-        if current is None:
-            best[key] = entry
-            continue
-        same_interval = entry["interval"] == current["interval"]
-        wants_trading = entry["interval"] == trading_interval
-        current_wants = current["interval"] == trading_interval
-        if wants_trading and not current_wants:
-            best[key] = entry
-        elif same_interval and _better(entry["metrics"], current["metrics"]):
-            best[key] = entry
-        elif (
-            wants_trading == current_wants
-            and not same_interval
-            and _better(entry["metrics"], current["metrics"])
-        ):
-            best[key] = entry
-
-    rows = []
-    for (family, symbol), entry in best.items():
-        rows.append(
-            (
-                f"{family}-{symbol}",
-                MIRROR_HYPOTHESIS,
-                family,
-                json.dumps(entry["params"]),
-                json.dumps(entry["metrics"]),
-                "active",
-                time.time(),
-                1,
-            )
-        )
-        db.log(
-            "strategy_mirrored",
-            {
-                "id": f"{family}-{symbol}",
-                "from": strategy_id(family, symbol, entry["interval"]),
-                "params": entry["params"],
-                "metrics": entry["metrics"],
-            },
-        )
-    return rows
+    try:
+        with db.conn() as c:
+            removed = c.execute(
+                "DELETE FROM strategies WHERE hypothesis_id=?", (MIRROR_HYPOTHESIS,)
+            ).rowcount
+    except Exception:
+        # A paper database missing the table is not a reason to fail research.
+        logger.warning("could not remove the legacy strategy mirror rows")
+        return 0
+    removed = removed or 0
+    if removed:
+        db.log("strategy_mirror_removed", {"rows": removed})
+    return removed
 
 
 def trading_cycle(watchlist=None, interval=None) -> None:
@@ -640,8 +824,18 @@ def trading_cycle(watchlist=None, interval=None) -> None:
                 last = float(c[-1]["close"])
                 cfg = db.get_all(cc)
                 px = last * (1 + _slip_rate(cfg))
-                qty, reason = plan_size(cfg, px, sig)
-                if qty <= 0:
+                # The stop is computed first, because the position is sized by the
+                # risk it carries to that stop and the position row carries the
+                # same number. One bracket, one risk, no second opinion.
+                sl = px * LONG_STOP if sig == "BUY" else px * SHORT_STOP
+                size = plan_size(
+                    cfg,
+                    px,
+                    sig,
+                    risk_budget=_config_float(cfg, "max_risk_usd", DEFAULT_RISK_BUDGET_USD),
+                    stop_price=sl,
+                )
+                if size.qty <= 0:
                     # Refused: log why rather than trading on money that is not
                     # there. No order, no fill, no position.
                     db.log(
@@ -650,7 +844,8 @@ def trading_cycle(watchlist=None, interval=None) -> None:
                             "symbol": symbol,
                             "side": sig,
                             "price": round(px, 6),
-                            "reason": reason,
+                            "reason": size.reason,
+                            "detail": size.detail,
                             "cash": round(cfg.get("cash", 0.0), 6),
                             "available": round(available_cash(cfg), 6),
                             "locked_margin": round(cfg.get("short_margin_locked", 0.0), 6),
@@ -659,6 +854,7 @@ def trading_cycle(watchlist=None, interval=None) -> None:
                         cc,
                     )
                     continue
+                qty = size.qty
                 oid = str(uuid.uuid4())[:8]
                 fee = px * qty * _fee_rate(cfg)
                 # Cash moves on the fill, inside this transaction. A buy
@@ -701,7 +897,7 @@ def trading_cycle(watchlist=None, interval=None) -> None:
                         px,
                         time.time(),
                         s["id"],
-                        px * 0.998 if sig == "BUY" else px * 1.002,
+                        sl,
                         px * 1.004 if sig == "BUY" else px * 0.996,
                         "open",
                         px,
