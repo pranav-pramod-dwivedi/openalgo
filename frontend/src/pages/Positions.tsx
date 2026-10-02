@@ -194,26 +194,51 @@ export default function Positions() {
     pauseWhenHidden: true,
   })
 
-  // Load preferences from localStorage
+  // Load preferences from localStorage (validated: a corrupt or foreign
+  // value must never reach setState, and defaults must not be persisted
+  // over real prefs on first mount).
+  const prefsLoadedRef = useRef(false)
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
       if (saved) {
-        const prefs: Preferences = JSON.parse(saved)
-        if (prefs.grouping) setGrouping(prefs.grouping)
-        if (prefs.filters)
+        const prefs = JSON.parse(saved) as Partial<Preferences>
+        if (
+          prefs.grouping === 'none' ||
+          prefs.grouping === 'underlying' ||
+          prefs.grouping === 'underlying_expiry'
+        ) {
+          setGrouping(prefs.grouping)
+        }
+        const f = prefs.filters
+        if (f && typeof f === 'object') {
           setFilters({
-            product: prefs.filters.product || [],
-            direction: prefs.filters.direction || [],
-            exchange: prefs.filters.exchange || [],
+            product: Array.isArray(f.product) ? f.product.filter((v) => typeof v === 'string') : [],
+            direction: Array.isArray(f.direction)
+              ? f.direction.filter((v) => typeof v === 'string')
+              : [],
+            exchange: Array.isArray(f.exchange)
+              ? f.exchange.filter((v) => typeof v === 'string')
+              : [],
           })
+        }
       }
-    } catch (_e) {}
+    } catch {
+      // Corrupt prefs: fall back to defaults.
+    } finally {
+      prefsLoadedRef.current = true
+    }
   }, [])
 
-  // Save preferences to localStorage
+  // Save preferences to localStorage (never on first mount: that would
+  // persist defaults over the stored prefs before they finish loading).
   const savePreferences = useCallback(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ grouping, filters }))
+    if (!prefsLoadedRef.current) return
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ grouping, filters }))
+    } catch {
+      // Storage refused: prefs simply do not survive reload.
+    }
   }, [grouping, filters])
 
   useEffect(() => {
@@ -222,8 +247,9 @@ export default function Positions() {
 
   const fetchPositions = useCallback(
     async (showRefresh = false) => {
+      // No key yet (session still syncing): stay on the skeleton, never
+      // render a fake "no positions" empty state.
       if (!apiKey) {
-        setIsLoading(false)
         return
       }
 

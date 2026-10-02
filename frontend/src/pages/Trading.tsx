@@ -103,9 +103,35 @@ function readSync(): SyncState {
   }
 }
 
+/** Storage access that never throws: blocked/private-mode storage must not
+ * crash the terminal, it just makes layout choices forgetful for the visit. */
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function writeStored(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // In-memory state still works; the choice just does not survive reload.
+  }
+}
+
+function removeStored(key: string): void {
+  try {
+    localStorage.removeItem(key)
+  } catch {
+    // ignore
+  }
+}
+
 export default function Trading() {
   const [layoutId, setLayoutId] = useState(() => {
-    const saved = localStorage.getItem(LAYOUT_KEY)
+    const saved = readStored(LAYOUT_KEY)
     return LAYOUTS.some((l) => l.id === saved) ? (saved as string) : 'single'
   })
   const [sync, setSync] = useState<SyncState>(readSync)
@@ -140,7 +166,7 @@ export default function Trading() {
 
   /* ── side panels ─────────────────────────────────────────────────────── */
   const [panel, setPanel] = useState<PanelId | null>(() => {
-    const saved = localStorage.getItem(PANEL_KEY)
+    const saved = readStored(PANEL_KEY)
     // Checked against the rail's own list rather than a second copy of it, so
     // a panel added or renamed there cannot leave this reading a stale name.
     return isPanelId(saved) ? saved : null
@@ -302,12 +328,12 @@ export default function Trading() {
   }
 
   useEffect(() => {
-    localStorage.setItem(LAYOUT_KEY, layoutId)
+    writeStored(LAYOUT_KEY, layoutId)
   }, [layoutId])
 
   useEffect(() => {
-    if (panel) localStorage.setItem(PANEL_KEY, panel)
-    else localStorage.removeItem(PANEL_KEY)
+    if (panel) writeStored(PANEL_KEY, panel)
+    else removeStored(PANEL_KEY)
   }, [panel])
 
   useEffect(() => {
@@ -382,7 +408,7 @@ export default function Trading() {
   }, [panel, dock, tool])
 
   useEffect(() => {
-    localStorage.setItem(SYNC_KEY, JSON.stringify(sync))
+    writeStored(SYNC_KEY, JSON.stringify(sync))
     // setOptions, not a rebuild: the engine clears the linked crosshairs when
     // that switch goes off and converges the group on its agreed symbol when
     // the symbol switch comes on, neither of which a fresh group would do.

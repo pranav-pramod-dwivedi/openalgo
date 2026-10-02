@@ -507,6 +507,44 @@ def create_app():
             app.db_ready.wait(timeout=30)
 
     @app.before_request
+    def kiosk_auto_login():
+        """Trusted-kiosk auto-login: open the app with no login screen.
+
+        Only when KIOSK_AUTO_LOGIN=true (single-user, trusted network only).
+        Establishes the exact session shape of
+        GET /auth/switch-account?account=binance_demo (user ``binance_demo``
+        on broker ``binance_demo``) without password or broker OAuth, so
+        /auth/session-status and /auth/dashboard-data serve the Binance
+        account directly. Never touches an existing session, never calls
+        upsert_auth (no shared-feed teardown), and never runs for API,
+        webhook, OAuth-callback, or static paths. /auth/logout still clears
+        the session; the next UI request simply re-establishes it.
+        """
+        import os
+
+        from flask import request
+
+        if os.getenv("KIOSK_AUTO_LOGIN", "false").lower() != "true":
+            return
+        if session.get("user"):
+            return
+        if request.path.startswith(
+            ("/api/", "/static/", "/assets/", "/flow/webhook", "/auth/broker/", "/_reload-ws")
+        ):
+            return
+
+        from utils.session import set_session_login_time
+
+        session.clear()
+        session["user"] = "binance_demo"
+        session["broker"] = "binance_demo"
+        session["logged_in"] = True
+        session["mode"] = "live"
+        session.permanent = True
+        set_session_login_time()
+        logger.info("Kiosk auto-login established binance_demo session")
+
+    @app.before_request
     def check_session_expiry():
         """Check session validity before each request"""
         from flask import request

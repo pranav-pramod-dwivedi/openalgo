@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, LogOut, Menu, Moon, Sun, Zap } from 'lucide-react'
+import { BookOpen, LogOut, Menu, Moon, Sun } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { authApi } from '@/api/auth'
@@ -25,7 +25,6 @@ import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
-import { showToast } from '@/utils/toast'
 
 interface NavbarProps {
   fluid?: boolean
@@ -36,37 +35,21 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
-  const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
+  const { mode, toggleMode } = useThemeStore()
   const { user, logout } = useAuthStore()
   const filteredProfileMenuItems = useProfileMenuItems()
 
   const handleLogout = async () => {
+    // Kiosk build: there is no login screen. Logging out clears the server
+    // session, and the next UI request re-establishes it, so return to the
+    // dashboard rather than a page that no longer exists.
     try {
       await authApi.logout()
-      logout()
-      navigate('/login')
-      showToast.success('Logged out successfully')
     } catch {
-      logout()
-      navigate('/login')
+      // The kiosk re-creates the session either way; nothing to report.
     }
-  }
-
-  const handleModeToggle = async () => {
-    const result = await toggleAppMode()
-    if (result.success) {
-      const newMode = useThemeStore.getState().appMode
-      showToast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`)
-      if (newMode === 'analyzer') {
-        setTimeout(() => {
-          showToast.warning('Analyzer (Sandbox) mode is for testing purposes only', undefined, {
-            duration: 10000,
-          })
-        }, 2000)
-      }
-    } else {
-      showToast.error(result.message || 'Failed to toggle mode')
-    }
+    logout()
+    navigate('/dashboard')
   }
 
   const isActive = (href: string) => isActiveRoute(location.pathname, href)
@@ -245,61 +228,9 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
 
         {/* Right Side */}
         <div className="ml-auto flex items-center gap-1.5">
-          {/* Account Switcher — Swiss Segmented Multi-Market Control */}
-          <div className="flex items-center p-1 bg-muted/50 rounded-full border border-border/80 text-xs">
-            <button
-              type="button"
-              onClick={() => {
-                window.location.href = '/auth/switch-account?account=inr'
-              }}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-1 rounded-full transition-all duration-150 cursor-pointer text-xs font-semibold',
-                !user?.username?.toLowerCase().includes('usd') &&
-                user?.broker !== 'binance_demo' &&
-                !user?.username?.toLowerCase().includes('binance')
-                  ? 'bg-foreground text-background font-semibold shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              title="Indian Markets (INR Sandbox)"
-            >
-              <span>🇮🇳</span>
-              <span className="hidden xl:inline">INR</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                window.location.href = '/auth/switch-account?account=usd'
-              }}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-1 rounded-full transition-all duration-150 cursor-pointer text-xs font-semibold',
-                user?.username?.toLowerCase().includes('usd') &&
-                user?.broker !== 'binance_demo' &&
-                !user?.username?.toLowerCase().includes('binance')
-                  ? 'bg-foreground text-background font-semibold shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              title="Forex & Crypto (USD Sandbox)"
-            >
-              <span>🌐</span>
-              <span className="hidden xl:inline">USD</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                window.location.href = '/auth/switch-account?account=binance'
-              }}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-1 rounded-full transition-all duration-150 cursor-pointer text-xs font-semibold',
-                user?.broker === 'binance_demo' || user?.username?.toLowerCase().includes('binance')
-                  ? 'bg-foreground text-background font-semibold shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              title="Binance Official Demo"
-            >
-              <span>🟡</span>
-              <span className="hidden xl:inline">Binance</span>
-            </button>
-          </div>
+          {/* Kiosk build: single broker (Binance), so the INR/USD sandbox
+              account switcher is gone. It used to offer markets this
+              deployment no longer loads. */}
 
           {/* Broker Badge */}
           {user?.broker && (
@@ -308,35 +239,14 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
             </span>
           )}
 
-          {/* Mode Badge */}
-          <Badge
-            variant={appMode === 'live' ? 'default' : 'secondary'}
-            className={cn(
-              'text-[10px] font-medium rounded-md px-1.5 py-0',
-              appMode === 'analyzer' && 'bg-purple-500 hover:bg-purple-600 text-white'
-            )}
-          >
-            <span className="hidden lg:inline">{appMode === 'live' ? 'Live Mode' : 'Analyze'}</span>
-            <span className="lg:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
+          {/* Mode Badge. Kiosk build is live-only: the analyze toggle is
+              removed because analyze mode routes every order, including an
+              exit for a live position, to the sandbox, which reports success
+              while the real position is still open. */}
+          <Badge variant="default" className="text-[10px] font-medium rounded-md px-1.5 py-0">
+            <span className="hidden lg:inline">Live Mode</span>
+            <span className="lg:hidden">Live</span>
           </Badge>
-
-          {/* Mode Toggle */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 rounded-lg"
-            onClick={handleModeToggle}
-            disabled={isTogglingMode}
-            title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
-          >
-            {isTogglingMode ? (
-              <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-            ) : appMode === 'live' ? (
-              <Zap className="h-3.5 w-3.5" />
-            ) : (
-              <BarChart3 className="h-3.5 w-3.5" />
-            )}
-          </Button>
 
           {/* Theme Toggle */}
           <Button
@@ -344,7 +254,6 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
             size="icon"
             className="h-7 w-7 rounded-lg"
             onClick={toggleMode}
-            disabled={appMode !== 'live'}
             title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
           >
             {mode === 'light' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}

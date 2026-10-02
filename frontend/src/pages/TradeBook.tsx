@@ -183,8 +183,9 @@ export default function TradeBook() {
 
   const fetchTrades = useCallback(
     async (showRefresh = false) => {
+      // No key yet (session still syncing): stay on the skeleton, never
+      // render a fake "no trades" empty state.
       if (!apiKey) {
-        setIsLoading(false)
         return
       }
 
@@ -373,12 +374,26 @@ export default function TradeBook() {
                     Exchange
                   </Label>
                   <div className="flex flex-wrap gap-2">
-                    <FilterChip type="exchange" value="NSE" label="NSE" />
-                    <FilterChip type="exchange" value="BSE" label="BSE" />
-                    <FilterChip type="exchange" value="NFO" label="NFO" />
-                    <FilterChip type="exchange" value="BFO" label="BFO" />
-                    <FilterChip type="exchange" value="MCX" label="MCX" />
-                    <FilterChip type="exchange" value="CDS" label="CDS" />
+                    {isCrypto ? (
+                      <>
+                        <FilterChip type="exchange" value="CRYPTO" label="Crypto" />
+                        <FilterChip type="exchange" value="BINANCE_SPOT" label="Spot" />
+                        <FilterChip
+                          type="exchange"
+                          value="BINANCE_FUTURES"
+                          label="Futures"
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <FilterChip type="exchange" value="NSE" label="NSE" />
+                        <FilterChip type="exchange" value="BSE" label="BSE" />
+                        <FilterChip type="exchange" value="NFO" label="NFO" />
+                        <FilterChip type="exchange" value="BFO" label="BFO" />
+                        <FilterChip type="exchange" value="MCX" label="MCX" />
+                        <FilterChip type="exchange" value="CDS" label="CDS" />
+                      </>
+                    )}
                   </div>
                 </div>
 

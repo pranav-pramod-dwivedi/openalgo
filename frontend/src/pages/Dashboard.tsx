@@ -1,14 +1,11 @@
 import {
   Activity,
   ArrowUpRight,
-  BarChart3,
   BookOpen,
   Coins,
   ExternalLink,
   FileText,
-  GraduationCap,
   RefreshCw,
-  Search,
   ShieldCheck,
   TrendingUp,
   Zap,
@@ -50,6 +47,13 @@ interface MarginData {
   m2mrealized: string
   utiliseddebits: string
   is_binance?: boolean
+  is_live?: boolean
+  trading_floor?: string
+  savings_usdt?: string
+  tradable_usdt?: string
+  wallet_total_usd?: string
+  equity_usd?: string
+  open_notional_usd?: string
   spot_usdt?: string
   futures_usdt?: string
   futures_wallet_usd?: string
@@ -135,10 +139,16 @@ export default function Dashboard() {
   const [brokerExpired, setBrokerExpired] = useState(false)
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Fetch dashboard funds data
-  const fetchFundsData = useCallback(async () => {
+  // Fetch dashboard funds data. Foreground load drives the skeleton cards;
+  // background refreshes (poll, socket events, mode changes) must not flash
+  // them back to placeholders.
+  const fetchFundsData = useCallback(async (background = false) => {
     try {
-      setIsLoading(true)
+      if (background) {
+        setIsRefreshing(true)
+      } else {
+        setIsLoading(true)
+      }
       const response = await fetch('/auth/dashboard-data', {
         credentials: 'include',
       })
@@ -175,18 +185,22 @@ export default function Dashboard() {
     fetchFundsData()
   }, [fetchFundsData])
 
+  const refreshFunds = useCallback(() => {
+    fetchFundsData(true)
+  }, [fetchFundsData])
+
   // Auto-refresh dashboard every 60s (less aggressive than trading pages)
   useEffect(() => {
     autoRefreshRef.current = setInterval(() => {
-      fetchFundsData()
+      refreshFunds()
     }, 60_000)
     return () => {
       if (autoRefreshRef.current) clearInterval(autoRefreshRef.current)
     }
-  }, [fetchFundsData])
+  }, [refreshFunds])
 
   // Refresh funds when an order is placed (via SocketIO event)
-  useOrderEventRefresh(fetchFundsData, {
+  useOrderEventRefresh(refreshFunds, {
     events: ['order_event', 'analyzer_update', 'close_position_event'],
   })
 
@@ -194,10 +208,10 @@ export default function Dashboard() {
   useEffect(() => {
     const unsubscribe = onModeChange(() => {
       // Refresh funds data when mode changes
-      fetchFundsData()
+      refreshFunds()
     })
     return () => unsubscribe()
-  }, [fetchFundsData])
+  }, [refreshFunds])
 
   // Check master contract status
   const checkMasterContractStatus = useCallback(async () => {
@@ -219,21 +233,21 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
+    // Indian symbology download is meaningless on Binance: never poll it.
+    if (isBinance) return
     checkMasterContractStatus()
+  }, [checkMasterContractStatus, isBinance])
 
-    // Poll every 5 seconds until successful
+  // Poll every 5 seconds until successful, then stop. The interval is owned by
+  // the effect (not a setState updater) so StrictMode double-invoke cannot
+  // multiply it and success tears it down instead of polling forever.
+  useEffect(() => {
+    if (isBinance || masterContract.status === 'success') return
     const interval = setInterval(() => {
-      setMasterContract((prev) => {
-        if (prev.status === 'success') {
-          return prev // Don't check again if already successful
-        }
-        checkMasterContractStatus()
-        return prev
-      })
+      checkMasterContractStatus()
     }, 5000)
-
     return () => clearInterval(interval)
-  }, [checkMasterContractStatus])
+  }, [checkMasterContractStatus, isBinance, masterContract.status])
 
   // Master Contract LED color
   const getMasterContractLedColor = () => {
@@ -279,48 +293,46 @@ export default function Dashboard() {
 
   const quickAccessCards = [
     {
-      href: '/search',
-      label: 'OpenAlgo Symbols',
-      description: 'Universal master symbology & tick specs',
-      icon: Search,
-      tag: 'DIRECTORY',
+      href: '/trading',
+      label: 'Chart Terminal',
+      description: 'Live Binance charts, order placement & position control',
+      icon: TrendingUp,
+      tag: 'LIVE',
     },
     {
-      href: '/logs',
-      label: 'Live Execution Logs',
-      description: 'Real-time order audit trail & event streams',
-      icon: FileText,
-      tag: 'TELEMETRY',
-    },
-    {
-      href: 'https://docs.openalgo.in',
-      label: 'Documentation & API',
-      description: 'REST endpoints, webhooks & Python SDK',
-      icon: BookOpen,
-      tag: 'MANUAL',
-      external: true,
-    },
-    {
-      href: '/pnl-tracker',
-      label: 'Intraday P&L Tracker',
-      description: 'Live mark-to-market performance analytics',
-      icon: BarChart3,
-      tag: 'ANALYTICS',
-    },
-    {
-      href: 'https://www.openalgo.in/learn',
-      label: 'OpenVarsity Academy',
-      description: 'Algorithmic trading models & documentation',
-      icon: GraduationCap,
-      tag: 'EDUCATION',
-      external: true,
-    },
-    {
-      href: '/logs/latency',
-      label: 'Low-Latency Monitor',
-      description: 'Microsecond API & execution roundtrip ping',
+      href: '/agent',
+      label: 'AI Trading Agent',
+      description: 'Ask the agent to analyze, chart and propose trades',
       icon: Zap,
-      tag: 'DIAGNOSTICS',
+      tag: 'AI',
+    },
+    {
+      href: '/positions',
+      label: 'Positions',
+      description: 'Open exposure with live mark prices',
+      icon: Activity,
+      tag: 'RISK',
+    },
+    {
+      href: '/orderbook',
+      label: 'Orderbook',
+      description: 'Open orders, modify and cancel',
+      icon: FileText,
+      tag: 'ORDERS',
+    },
+    {
+      href: '/tradebook',
+      label: 'Tradebook',
+      description: 'Filled trades and realized performance',
+      icon: BookOpen,
+      tag: 'FILLS',
+    },
+    {
+      href: '/apikey',
+      label: 'API Key',
+      description: 'Key backing charts, webhooks and external tools',
+      icon: ShieldCheck,
+      tag: 'ACCESS',
     },
   ]
 
@@ -331,13 +343,13 @@ export default function Dashboard() {
       <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4">
         <h1 className="text-2xl font-bold">Broker Session Expired</h1>
         <p className="text-muted-foreground">
-          Your broker token has expired (brokers roll tokens daily). Reconnect to continue trading.
+          The trading session needs a refresh. Reload to continue trading.
         </p>
         <Link
-          to="/broker"
+          to="/dashboard"
           className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
         >
-          Reconnect Broker
+          Reload Dashboard
         </Link>
       </div>
     )
@@ -348,9 +360,9 @@ export default function Dashboard() {
     return (
       <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4">
         <h1 className="text-2xl font-bold">Session Expired</h1>
-        <p className="text-muted-foreground">Please log in to access the dashboard.</p>
-        <Link to="/login" className="text-primary hover:underline">
-          Go to Login
+        <p className="text-muted-foreground">Reload the dashboard to re-establish the session.</p>
+        <Link to="/dashboard" className="text-primary hover:underline">
+          Go to Dashboard
         </Link>
       </div>
     )
@@ -376,7 +388,8 @@ export default function Dashboard() {
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap">
-          {/* Master Contract Status Badge */}
+          {/* Master Contract Status Badge (Indian symbology; hidden on Binance) */}
+          {!isBinance && (
           <div className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-muted/50 border border-border/60 text-xs">
             <span className="text-muted-foreground font-medium">Contract:</span>
             <div className="flex items-center gap-1.5">
@@ -389,6 +402,7 @@ export default function Dashboard() {
               </span>
             </div>
           </div>
+          )}
 
           <DataFreshness
             lastUpdated={lastUpdated}
@@ -401,8 +415,7 @@ export default function Dashboard() {
             size="sm"
             className="h-8 px-2.5 text-xs font-medium border-border/80 hover:bg-muted/80"
             onClick={() => {
-              setIsRefreshing(true)
-              fetchFundsData()
+              fetchFundsData(true)
             }}
             disabled={isRefreshing || isLoading}
           >
@@ -673,10 +686,11 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Official Binance Live Connection & Portfolio (Shown when Binance Demo is active) */}
+      {/* Official Binance Connection & Portfolio (Shown when Binance is active) */}
       {isBinance && (
         <div className="space-y-4 md:space-y-5">
-          {/* Live Connection Banner — Swiss Monochrome */}
+          {/* Connection Banner — the venue is stated here because a live key
+              trades real funds and a demo key does not. */}
           <div className="terminal-panel p-3.5 md:p-4 border-border bg-card flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="relative flex h-2 w-2">
@@ -686,21 +700,37 @@ export default function Dashboard() {
               <div>
                 <div className="flex items-center gap-2">
                   <span className="font-bold text-foreground text-sm tracking-tight">
-                    Official Binance Demo Engine Active
+                    {marginData?.is_live
+                      ? 'Binance Live Account Connected'
+                      : 'Binance Demo Engine Active'}
                   </span>
-                  <span className="px-1.5 py-0.2 rounded-sm text-[10px] font-mono font-semibold uppercase tracking-wider bg-muted text-foreground border border-border">
-                    LIVE REST API
+                  <span
+                    className={cn(
+                      'px-1.5 py-0.2 rounded-sm text-[10px] font-mono font-semibold uppercase tracking-wider border',
+                      marginData?.is_live
+                        ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                        : 'bg-muted text-foreground border-border'
+                    )}
+                  >
+                    {marginData?.is_live ? 'REAL FUNDS' : 'TESTNET'}
                   </span>
                 </div>
                 <p className="text-[11px] font-mono text-muted-foreground mt-0.5">
-                  Spot: <span className="text-foreground">demo-api.binance.com</span> &bull; Futures:{' '}
-                  <span className="text-foreground">testnet.binancefuture.com</span> &bull; HMAC-SHA256
+                  Spot:{' '}
+                  <span className="text-foreground">
+                    {marginData?.is_live ? 'api.binance.com' : 'demo-api.binance.com'}
+                  </span>{' '}
+                  &bull; Futures:{' '}
+                  <span className="text-foreground">
+                    {marginData?.is_live ? 'fapi.binance.com' : 'testnet.binancefuture.com'}
+                  </span>{' '}
+                  &bull; HMAC-SHA256
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-2 text-xs">
               <a
-                href="https://demo.binance.com/en-IN/trade"
+                href={marginData?.is_live ? 'https://www.binance.com/en/trade' : 'https://demo.binance.com/en-IN/trade'}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm bg-background hover:bg-muted border border-border text-foreground transition-colors font-medium text-xs"
@@ -709,7 +739,7 @@ export default function Dashboard() {
                 <ExternalLink className="h-3 w-3" />
               </a>
               <a
-                href="https://demo.binance.com/en-IN/futures"
+                href={marginData?.is_live ? 'https://www.binance.com/en/futures' : 'https://demo.binance.com/en-IN/futures'}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm bg-background hover:bg-muted border border-border text-foreground transition-colors font-medium text-xs"
@@ -730,12 +760,12 @@ export default function Dashboard() {
                   <span>Spot Demo Assets</span>
                 </div>
                 <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded-sm bg-muted text-foreground border border-border/60">
-                  ${marginData?.spot_usdt || '0.00'} USDT Free
+                  ${marginData?.spot_usdt || '0.00'} On Exchange
                 </span>
               </div>
               <div className="grid grid-cols-3 gap-2">
                 <div className="p-2 bg-muted/40 rounded border border-border/50 text-center">
-                  <p className="text-[10px] font-mono uppercase text-muted-foreground">USDT Free</p>
+                  <p className="text-[10px] font-mono uppercase text-muted-foreground">USDT On Exchange</p>
                   <p className="font-mono font-bold text-sm text-foreground mt-0.5">
                     ${marginData?.spot_usdt || '0.00'}
                   </p>
@@ -772,24 +802,30 @@ export default function Dashboard() {
               <div className="flex items-center justify-between pb-2 border-b border-border/50">
                 <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                   <TrendingUp className="h-4 w-4 text-emerald-500" />
-                  <span>Futures Testnet Margin</span>
+                  <span>Tradable Balance</span>
                 </div>
                 <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded bg-muted">
-                  ${marginData?.futures_usdt || '0.00'} Available
+                  ${marginData?.tradable_usdt ?? marginData?.futures_usdt ?? '0.00'} Available
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div className="p-2 bg-muted/40 rounded border border-border/50 text-center">
-                  <p className="text-[10px] font-mono uppercase text-muted-foreground">Futures Margin</p>
+                  <p className="text-[10px] font-mono uppercase text-muted-foreground">Tradable</p>
                   <p className="font-mono font-bold text-sm text-foreground mt-0.5">
-                    ${marginData?.futures_usdt || '0.00'}
+                    ${marginData?.tradable_usdt ?? marginData?.futures_usdt ?? '0.00'}
                   </p>
                 </div>
                 <div className="p-2 bg-muted/40 rounded border border-border/50 text-center">
-                  <p className="text-[10px] font-mono uppercase text-muted-foreground">Starting Base</p>
-                  <p className="font-mono font-bold text-sm text-emerald-500 mt-0.5">$100.00</p>
+                  <p className="text-[10px] font-mono uppercase text-muted-foreground">Savings (protected)</p>
+                  <p className="font-mono font-bold text-sm text-emerald-500 mt-0.5">
+                    ${marginData?.savings_usdt ?? '0.00'}
+                  </p>
                 </div>
               </div>
+              <p className="text-[11px] font-mono text-muted-foreground">
+                Floor ${marginData?.trading_floor ?? '14880.00'} is never traded. The bot
+                may only use what sits above it.
+              </p>
             </div>
           </div>
 
@@ -907,20 +943,6 @@ export default function Dashboard() {
                 </div>
               </div>
             )
-
-            if (card.external) {
-              return (
-                <a
-                  key={card.href}
-                  href={card.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={cardClasses}
-                >
-                  {cardContent}
-                </a>
-              )
-            }
 
             return (
               <Link key={card.href} to={card.href} className={cardClasses}>

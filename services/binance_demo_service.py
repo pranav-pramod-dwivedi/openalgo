@@ -35,11 +35,108 @@ BINANCE_DEMO_SECRET_KEY = os.getenv(
     "KdjplsfWdKXfxZLMngimssYewD0FJVausArtXztOmZJPxLPxnSzkvYA4uY4ZhSAr",
 )
 
-SPOT_BASE_URL = "https://demo-api.binance.com"
-FUTURES_BASE_URL = "https://testnet.binancefuture.com"
+# Endpoints per venue mode. Demo (testnet) is the default and needs no keys of
+# your own; live is opt-in and only takes effect when real credentials are
+# present, so a missing key can never silently point trading at the real
+# exchange with the demo key.
+_DEMO_URLS = {
+    "spot": "https://demo-api.binance.com",
+    "futures": "https://testnet.binancefuture.com",
+}
+_LIVE_URLS = {
+    "spot": "https://api.binance.com",
+    "futures": "https://fapi.binance.com",
+}
+
+
+def is_live_mode() -> bool:
+    """True when this deployment trades the real Binance exchange.
+
+    Requires BINANCE_MODE=live AND both real credentials. Anything less stays
+    on testnet, so a typo or a half-filled key cannot trade real funds.
+    """
+    if os.getenv("BINANCE_MODE", "demo").strip().lower() != "live":
+        return False
+    return bool(
+        os.getenv("BINANCE_API_KEY", "").strip() and os.getenv("BINANCE_API_SECRET", "").strip()
+    )
+
+
+def get_api_credentials() -> tuple[str, str]:
+    """Return the (api_key, secret) pair for the effective venue mode."""
+    if is_live_mode():
+        return (
+            os.getenv("BINANCE_API_KEY", "").strip(),
+            os.getenv("BINANCE_API_SECRET", "").strip(),
+        )
+    return BINANCE_DEMO_API_KEY, BINANCE_DEMO_SECRET_KEY
+
+
+def get_base_urls() -> tuple[str, str]:
+    """Return (spot_base_url, futures_base_url) for the effective venue mode."""
+    urls = _LIVE_URLS if is_live_mode() else _DEMO_URLS
+    return urls["spot"], urls["futures"]
+
+
+SPOT_BASE_URL, FUTURES_BASE_URL = get_base_urls()
 
 # Symbols to query for trades and orders
 TRADE_SYMBOLS = ["SOLUSDT", "BTCUSDT"]
+
+# Protected savings floor (USDT). The account's first FLOOR dollars are never
+# tradable: tradable = max(0, equity - floor - margin_locked). The bot and all
+# order paths may only use what sits above the floor. Configured via
+# BINANCE_TRADING_FLOOR so the operator can raise it as savings grow; it must
+# never be lowered by automated code.
+TRADING_FLOOR_ENV_VAR = "BINANCE_TRADING_FLOOR"
+DEFAULT_TRADING_FLOOR = 14880.0
+
+# Assumed futures leverage for the initial-margin estimate (matches the
+# long-standing margin_required = utilised / 10 convention below).
+FUTURES_LEVERAGE = 10.0
+
+# Assets counted at face value when sizing the wallet in USDT.
+STABLE_ASSETS = {"USDT", "USDC", "BUSD", "FDUSD", "TUSD", "USDP"}
+
+# Non-stable spot assets valued via the public spot ticker when sizing the
+# wallet. Anything else is ignored (conservative: unknown assets do not extend
+# tradable credit).
+VALUED_ASSETS = {"BTC", "ETH", "SOL", "BNB"}
+
+
+def get_trading_floor() -> float:
+    """Return the protected savings floor in USDT (never negative)."""
+    try:
+        return max(0.0, float(os.getenv(TRADING_FLOOR_ENV_VAR, DEFAULT_TRADING_FLOOR)))
+    except (TypeError, ValueError):
+        return DEFAULT_TRADING_FLOOR
+
+
+def compute_tradable(
+    wallet_usd: float,
+    unrealized_pnl: float,
+    open_notional: float,
+    floor: float,
+    leverage: float = FUTURES_LEVERAGE,
+) -> Dict[str, float]:
+    """Split futures/spot equity into protected savings and tradable cash.
+
+    Pure function (no I/O) so the split is unit-testable. Margin already
+    locked by open positions is not tradable either.
+    """
+    margin_locked = open_notional / leverage if leverage > 0 else 0.0
+    equity = wallet_usd + unrealized_pnl
+    savings = max(0.0, min(equity, floor))
+    tradable = max(0.0, equity - floor - margin_locked)
+    return {
+        "wallet_usd": wallet_usd,
+        "equity_usd": equity,
+        "open_notional": open_notional,
+        "margin_locked": margin_locked,
+        "floor": floor,
+        "savings": savings,
+        "tradable": tradable,
+    }
 
 # Server time cache TTL in seconds
 _SERVER_TIME_TTL = 5.0
@@ -70,11 +167,15 @@ def _build_session() -> requests.Session:
 class BinanceDemoService:
     def __init__(
         self,
-        api_key: str = BINANCE_DEMO_API_KEY,
-        secret_key: str = BINANCE_DEMO_SECRET_KEY,
+        api_key: str | None = None,
+        secret_key: str | None = None,
     ):
-        self.api_key = api_key
-        self.secret_key = secret_key
+        # Resolved per instantiation rather than bound as argument defaults, so
+        # the effective mode's credentials are used even though the module was
+        # imported before .env was read.
+        default_key, default_secret = get_api_credentials()
+        self.api_key = api_key or default_key
+        self.secret_key = secret_key or default_secret
         # One pooled session per instance — reuses TCP connections
         self._session = _build_session()
         # Server time cache: {(base_url, endpoint): (timestamp, fetched_at)}
@@ -231,12 +332,104 @@ class BinanceDemoService:
                     )
         return positions
 
+    def _get_futures_price(self, symbol: str) -> Optional[float]:
+        """Return the latest futures mark price for a symbol, or None."""
+        try:
+            r = self._session.get(
+                f"{FUTURES_BASE_URL}/fapi/v1/ticker/price",
+                params={"symbol": symbol.upper()},
+                timeout=3.0,
+            )
+            if r.status_code == 200:
+                return float(r.json().get("price", 0)) or None
+        except Exception as e:
+            logger.warning(f"Error fetching futures price for {symbol}: {e}")
+        return None
+
+    def _value_wallet_usd(
+        self, bals: Dict[str, Any], spot_prices: Dict[str, float]
+    ) -> float:
+        """Size the total wallet in USDT. Unknown assets count as zero."""
+        total = 0.0
+        for b in bals.get("futures", []) or []:
+            asset = str(b.get("asset", "")).upper()
+            if asset in STABLE_ASSETS:
+                try:
+                    total += float(b.get("balance", 0))
+                except (TypeError, ValueError):
+                    continue
+        for s in bals.get("spot", []) or []:
+            asset = str(s.get("asset", "")).upper()
+            try:
+                qty = float(s.get("total", 0))
+            except (TypeError, ValueError):
+                continue
+            if asset in STABLE_ASSETS:
+                total += qty
+            elif asset in VALUED_ASSETS:
+                price = spot_prices.get(f"{asset}USDT", 0.0)
+                if price > 0:
+                    total += qty * price
+        return total
+
+    def get_tradable_usdt(self) -> Dict[str, Any]:
+        """Return the floor-guarded tradable split (I/O: balances+positions).
+
+        On any fetch failure the tradable leg is 0.0 (fail-closed for new
+        exposure) while exits stay allowed; callers must not treat the split
+        as a balance assertion, only as a spending cap.
+        """
+        floor = get_trading_floor()
+        bals: Dict[str, Any] = {"spot": [], "futures": []}
+        positions: List[Dict[str, Any]] = []
+        spot_prices: Dict[str, float] = {}
+        bals_ok = [False]
+        pos_ok = [False]
+
+        def _fetch_bals():
+            data = self.get_account_balances()
+            if data:
+                bals["spot"] = data.get("spot", [])
+                bals["futures"] = data.get("futures", [])
+                bals_ok[0] = True
+
+        def _fetch_pos():
+            positions.extend(self.get_positions() or [])
+            pos_ok[0] = True
+
+        def _fetch_prices():
+            spot_prices.update(self._get_spot_prices())
+
+        futs = [
+            _POOL.submit(_fetch_bals),
+            _POOL.submit(_fetch_pos),
+            _POOL.submit(_fetch_prices),
+        ]
+        for f in futs:
+            try:
+                f.result(timeout=10)
+            except Exception as e:
+                logger.warning(f"get_tradable_usdt fetch failed: {e}")
+
+        wallet = self._value_wallet_usd(bals, spot_prices)
+        unrealized = sum(float(p.get("unrealized_pnl", 0) or 0) for p in positions)
+        open_notional = sum(
+            abs(float(p.get("amount", 0) or 0)) * float(p.get("mark_price", 0) or 0)
+            for p in positions
+        )
+        split = compute_tradable(wallet, unrealized, open_notional, floor)
+        split["balances_ok"] = bals_ok[0]
+        split["positions_ok"] = pos_ok[0]
+        split["verified"] = bool(bals_ok[0] and pos_ok[0])
+        return split
+
     def get_margin_data(self) -> Dict[str, Any]:
         """Format Binance data into OpenAlgo's standard margin dict."""
-        # Fetch balances, positions, and trades in parallel
+        # Fetch balances, positions, trades, and spot prices in parallel
         bals_result = [None]
         pos_result = [None]
         trades_result = [None]
+        prices_result = [{}]
 
         def _fetch_bals():
             bals_result[0] = self.get_account_balances()
@@ -247,10 +440,14 @@ class BinanceDemoService:
         def _fetch_trades():
             trades_result[0] = self.get_tradebook_formatted()
 
+        def _fetch_prices():
+            prices_result[0] = self._get_spot_prices()
+
         futs = [
             _POOL.submit(_fetch_bals),
             _POOL.submit(_fetch_pos),
             _POOL.submit(_fetch_trades),
+            _POOL.submit(_fetch_prices),
         ]
         for f in futs:
             f.result(timeout=12)
@@ -258,6 +455,7 @@ class BinanceDemoService:
         bals = bals_result[0] or {"spot": [], "futures": []}
         positions = pos_result[0] or []
         trades = trades_result[0] or []
+        spot_prices = prices_result[0] or {}
 
         unrealized_pnl = sum(p["unrealized_pnl"] for p in positions)
         utilised_margin = sum(abs(p["amount"]) * p["entry_price"] for p in positions)
@@ -265,24 +463,58 @@ class BinanceDemoService:
 
         realized_pnl = sum(float(t.get("pnl", 0.0)) for t in trades)
 
-        base_capital = 100.00
-        net_equity = base_capital + realized_pnl + unrealized_pnl
-        avail_cash = max(0.0, base_capital + realized_pnl - margin_required)
+        # Floor-guarded capital: only equity above the protected savings floor
+        # is tradable. The floor itself is never spendable by the bot or orders.
+        floor = get_trading_floor()
+        wallet_usd = self._value_wallet_usd(bals, spot_prices)
+        open_notional = sum(
+            abs(p["amount"]) * p["mark_price"] for p in positions
+        )
+        split = compute_tradable(
+            wallet_usd, unrealized_pnl, open_notional, floor, FUTURES_LEVERAGE
+        )
+        avail_cash = split["tradable"]
+        net_equity = split["equity_usd"]
+        savings = split["savings"]
 
         spot_balances = [s for s in bals.get("spot", []) if s["asset"] != "USDC"]
         fut_balances = [f for f in bals.get("futures", []) if f["asset"] != "USDC"]
+
+        # On-exchange figures (informational only; spending is capped by the
+        # tradable split above, never by these).
+        spot_usdt_free = 0.0
+        for s in bals.get("spot", []) or []:
+            if str(s.get("asset", "")).upper() in STABLE_ASSETS:
+                try:
+                    spot_usdt_free += float(s.get("free", 0))
+                except (TypeError, ValueError):
+                    continue
+        fut_usdt_avail = 0.0
+        for f in bals.get("futures", []) or []:
+            if str(f.get("asset", "")).upper() in STABLE_ASSETS:
+                try:
+                    fut_usdt_avail += float(f.get("available", f.get("balance", 0)))
+                except (TypeError, ValueError):
+                    continue
 
         return {
             "availablecash": f"{avail_cash:.2f}",
             "collateral": "0.00",
             "hide_collateral": True,
-            "starting_capital": "100.00",
+            "starting_capital": f"{floor:.2f}",
             "m2munrealized": f"{unrealized_pnl:.2f}",
             "m2mrealized": f"{realized_pnl:.2f}",
             "utiliseddebits": f"{margin_required:.2f}",
             "is_binance": True,
-            "spot_usdt": f"{avail_cash / 2:.2f}",
-            "futures_usdt": f"{avail_cash / 2:.2f}",
+            "is_live": is_live_mode(),
+            "trading_floor": f"{floor:.2f}",
+            "savings_usdt": f"{savings:.2f}",
+            "tradable_usdt": f"{avail_cash:.2f}",
+            "wallet_total_usd": f"{wallet_usd:.2f}",
+            "equity_usd": f"{net_equity:.2f}",
+            "open_notional_usd": f"{open_notional:.2f}",
+            "spot_usdt": f"{spot_usdt_free:.2f}",
+            "futures_usdt": f"{fut_usdt_avail:.2f}",
             "futures_wallet_usd": f"{net_equity / 2:.2f}",
             "spot_wallet_usd": f"{net_equity / 2:.2f}",
             "total_balance_usd": f"{net_equity:.2f}",
@@ -703,6 +935,128 @@ class BinanceDemoService:
     # ------------------------------------------------------------------
     # Order placement
     # ------------------------------------------------------------------
+    def _check_tradable_cap(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        is_futures: bool,
+        price: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Floor guard: new exposure may only use equity above the savings floor.
+
+        Returns None when the order may proceed, else an error dict shaped like
+        place_order's failure response. Pure exits/reductions always pass so a
+        position can never be trapped by this guard; only exposure-increasing
+        size is capped. When verification data is unavailable, increases are
+        blocked (fail-closed) while reductions still pass.
+        """
+        if quantity <= 0:
+            return {
+                "status_code": 400,
+                "response": {"msg": "Quantity must be greater than 0", "code": -2},
+            }
+
+        clean_sym = (symbol or "").upper()
+        side = (side or "").upper()
+        ref_price = price if price and price > 0 else None
+
+        if is_futures:
+            try:
+                positions = self.get_positions() or []
+            except Exception as e:
+                logger.warning(f"Tradable-cap check: positions fetch failed: {e}")
+                positions = []
+            current = next(
+                (p for p in positions if str(p.get("symbol", "")).upper() == clean_sym),
+                None,
+            )
+            amt = float(current.get("amount", 0)) if current else 0.0
+            if side == "BUY":
+                new_exposure = quantity - min(quantity, -amt) if amt < 0 else quantity
+            elif side == "SELL":
+                new_exposure = quantity - min(quantity, amt) if amt > 0 else quantity
+            else:
+                return {
+                    "status_code": 400,
+                    "response": {"msg": f"Invalid side: {side}", "code": -2},
+                }
+            if new_exposure <= 0:
+                return None  # pure exit/reduction: always allowed
+            if ref_price is None:
+                ref_price = self._get_futures_price(clean_sym)
+            if ref_price is None or ref_price <= 0:
+                logger.warning(
+                    f"Blocked {side} {quantity} {clean_sym}: no reference price"
+                )
+                return {
+                    "status_code": 400,
+                    "response": {
+                        "msg": "Blocked: cannot verify price, new exposure not allowed",
+                        "code": -3,
+                    },
+                }
+        else:
+            # Spot: selling held assets only frees cash, so only BUYs are capped.
+            if side == "SELL":
+                return None
+            if side != "BUY":
+                return {
+                    "status_code": 400,
+                    "response": {"msg": f"Invalid side: {side}", "code": -2},
+                }
+            new_exposure = quantity
+            if ref_price is None:
+                ref_price = self._get_spot_prices().get(clean_sym, 0.0)
+            if not ref_price or ref_price <= 0:
+                logger.warning(
+                    f"Blocked {side} {quantity} {clean_sym}: no reference price"
+                )
+                return {
+                    "status_code": 400,
+                    "response": {
+                        "msg": "Blocked: cannot verify price, new exposure not allowed",
+                        "code": -3,
+                    },
+                }
+
+        try:
+            split = self.get_tradable_usdt()
+        except Exception as e:
+            logger.warning(f"Tradable-cap check: split fetch failed: {e}")
+            split = {}
+        if not split.get("verified"):
+            logger.warning(
+                f"Blocked {side} {quantity} {clean_sym}: tradable balance unverified"
+            )
+            return {
+                "status_code": 400,
+                "response": {
+                    "msg": "Blocked: tradable balance unverified, new exposure not allowed",
+                    "code": -3,
+                },
+            }
+        tradable = float(split.get("tradable", 0))
+        notional = new_exposure * ref_price
+        if notional > tradable + 1e-9:
+            floor = float(split.get("floor", get_trading_floor()))
+            logger.warning(
+                f"Blocked {side} {quantity} {clean_sym}: notional "
+                f"${notional:.2f} exceeds tradable ${tradable:.2f} "
+                f"(floor ${floor:.2f} protected)"
+            )
+            return {
+                "status_code": 400,
+                "response": {
+                    "msg": (
+                        f"Blocked: order ${notional:.2f} exceeds tradable "
+                        f"${tradable:.2f} (savings floor ${floor:.2f} protected)"
+                    ),
+                    "code": -4,
+                },
+            }
+        return None
+
     def place_order(
         self,
         symbol: str,
@@ -710,19 +1064,28 @@ class BinanceDemoService:
         quantity: float,
         order_type: str = "MARKET",
         is_futures: bool = True,
+        price: Optional[float] = None,
+        time_in_force: str = "GTC",
     ) -> Dict[str, Any]:
         """Place an order directly on Binance Demo / Testnet."""
+        guard = self._check_tradable_cap(symbol, side, quantity, is_futures, price)
+        if guard is not None:
+            return guard
         server_time = self._get_server_time(is_futures=is_futures)
         base = FUTURES_BASE_URL if is_futures else SPOT_BASE_URL
         endpoint = "/fapi/v1/order" if is_futures else "/api/v3/order"
 
-        params = {
+        params: Dict[str, Any] = {
             "symbol": symbol.upper(),
             "side": side.upper(),
             "type": order_type.upper(),
             "quantity": quantity,
             "timestamp": server_time,
         }
+        if order_type.upper() == "LIMIT" and price is not None:
+            params["price"] = price
+            params["timeInForce"] = time_in_force
+
         query = "&".join([f"{k}={v}" for k, v in params.items()])
         sig = self._sign(query)
 

@@ -116,6 +116,8 @@ class FundManager:
             return {
                 "availablecash": float(funds.available_balance),
                 "collateral": 0.00,  # No collateral in sandbox
+                "starting_capital": float(funds.total_capital),
+                "currency": getattr(self, "currency", "INR"),
                 "m2munrealized": float(funds.unrealized_pnl),
                 "m2mrealized": float(
                     funds.today_realized_pnl or 0

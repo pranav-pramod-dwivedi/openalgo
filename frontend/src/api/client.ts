@@ -44,8 +44,9 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Handle unauthorized - redirect to login
-      window.location.href = '/login'
+      // Handle unauthorized - kiosk session is owned server-side, so a 401
+      // means the session truly died: reload the dashboard to re-establish it.
+      window.location.href = '/dashboard'
     }
     return Promise.reject(error)
   }
@@ -141,8 +142,9 @@ webClient.interceptors.response.use(
   (error) => {
     const status = error.response?.status
     if (status === 401) {
-      // Unauthorized - redirect to login
-      window.location.href = '/login'
+      // Unauthorized - reload the dashboard so kiosk auto-login re-establishes
+      // the server session instead of stranding the user on a removed page.
+      window.location.href = '/dashboard'
     } else if (status === 403) {
       // Forbidden - user doesn't have permission for this resource
       // Create a more descriptive error for the caller to handle

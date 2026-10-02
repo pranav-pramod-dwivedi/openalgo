@@ -10,21 +10,17 @@ import {
 describe('Navigation Config', () => {
   describe('navItems', () => {
     it('contains the expected main navigation items', () => {
-      expect(navItems).toHaveLength(9)
+      expect(navItems).toHaveLength(6)
 
       const labels = navItems.map((item) => item.label)
-      expect(labels).toContain('Dashboard')
-      expect(labels).toContain('Tools')
-      expect(labels).toContain('Orderbook')
-      expect(labels).toContain('Positions')
-      expect(labels).toContain('Platforms')
-      expect(labels).toContain('Trading')
-      expect(labels).toContain('Strategies')
-
-      // Strategies sits directly after Platforms. Asserting the position, not
-      // just its presence, is the point: it is where the user expects to find
-      // it, and a later insertion that pushed it elsewhere should fail here.
-      expect(labels.indexOf('Strategies')).toBe(labels.indexOf('Platforms') + 1)
+      expect(labels).toEqual([
+        'Dashboard',
+        'Trading',
+        'Orderbook',
+        'Tradebook',
+        'Positions',
+        'Agent',
+      ])
     })
 
     it('all items have required properties', () => {
@@ -61,22 +57,14 @@ describe('Navigation Config', () => {
 
     it('contains remaining nav items', () => {
       const sheetLabels = mobileSheetItems.map((item) => item.label)
-      expect(sheetLabels).toContain('Trading')
-      expect(sheetLabels).toContain('Platforms')
-      expect(sheetLabels).toContain('Logs')
+      expect(sheetLabels).toEqual(['Trading', 'Agent'])
     })
   })
 
   describe('profileMenuItems', () => {
-    it('contains profile-related menu items', () => {
+    it('contains the kiosk menu items', () => {
       const labels = profileMenuItems.map((item) => item.label)
-      expect(labels).toContain('Profile')
-      expect(labels).toContain('API Key')
-      expect(labels).toContain('Holdings')
-      // Action Center moved from the main navbar into the profile dropdown,
-      // positioned right after API Key.
-      expect(labels).toContain('Action Center')
-      expect(labels.indexOf('Action Center')).toBe(labels.indexOf('API Key') + 1)
+      expect(labels).toEqual(['Agent', 'API Key'])
     })
   })
 

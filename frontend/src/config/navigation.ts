@@ -1,31 +1,12 @@
 import {
-  BarChart3,
-  Bell,
-  BookOpen,
   Bot,
-  Boxes,
   CandlestickChart,
   ClipboardList,
-  Code2,
-  Database,
-  FileBarChart,
-  FileStack,
   FileText,
-  FlaskConical,
-  Gauge,
   Key,
-  Layers,
   LayoutDashboard,
   type LucideIcon,
-  MessageCircle,
-  MessageSquare,
-  Search,
-  Settings,
   TrendingUp,
-  User,
-  Workflow,
-  Wrench,
-  Zap,
 } from 'lucide-react'
 
 export interface NavItem {
@@ -36,17 +17,14 @@ export interface NavItem {
   external?: boolean
 }
 
-// Main navigation items shown in desktop navbar
+// Kiosk build: Dashboard + Trading core + AI Agent only.
 export const navItems: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/trading', label: 'Trading', icon: CandlestickChart },
   { href: '/orderbook', label: 'Orderbook', icon: ClipboardList },
   { href: '/tradebook', label: 'Tradebook', icon: FileText },
   { href: '/positions', label: 'Positions', icon: TrendingUp },
-  { href: '/trading', label: 'Trading', icon: CandlestickChart },
-  { href: '/platforms', label: 'Platforms', icon: Layers },
-  { href: '/strategy', label: 'Strategies', icon: Boxes },
-  { href: '/logs', label: 'Logs', icon: FileBarChart },
-  { href: '/tools', label: 'Tools', icon: Wrench },
+  { href: '/agent', label: 'Agent', icon: Bot },
 ]
 
 // Items shown in mobile bottom navigation
@@ -65,35 +43,13 @@ export const mobileSheetItems = navItems.filter((item) => !bottomNavPaths.includ
 
 // Profile dropdown menu items
 export const profileMenuItems: NavItem[] = [
-  { href: '/profile', label: 'Profile', icon: User },
-  { href: '/apikey', label: 'API Key', icon: Key },
-  // Action Center stays immediately after API Key. It was moved here out of the
-  // main navbar on that understanding and a test pins the adjacency, so a new
-  // entry goes after it rather than between the two.
-  { href: '/action-center', label: 'Action Center', icon: Bell },
-  // Agent Config is NOT here. It lives under /admin with the other
-  // configuration surfaces. The chat header carries its own settings control,
-  // so a configured /agent still has a route back to its settings without this
-  // menu holding one.
   { href: '/agent', label: 'Agent', icon: Bot },
-  { href: '/master-contract', label: 'Master Contract', icon: FileStack },
-  { href: '/telegram', label: 'Telegram Bot', icon: MessageSquare },
-  { href: '/whatsapp', label: 'WhatsApp Bot', icon: MessageCircle },
-  { href: '/holdings', label: 'Holdings', icon: ClipboardList },
-  { href: '/flow', label: 'Flow Editor', icon: Workflow },
-  { href: '/scalping', label: 'Scalping', icon: Zap },
-  { href: '/python', label: 'Python Strategies', icon: Code2 },
-  { href: '/pnl-tracker', label: 'PnL Tracker', icon: BarChart3 },
-  { href: '/historify', label: 'Historify', icon: Database },
-  { href: '/search/token', label: 'Search', icon: Search },
-  { href: '/sandbox', label: 'Sandbox', icon: FlaskConical },
-  { href: '/leverage', label: 'Leverage', icon: Gauge },
-  { href: '/admin', label: 'Admin', icon: Settings },
+  { href: '/apikey', label: 'API Key', icon: Key },
 ]
 
 // External links
 export const externalLinks = {
-  docs: { href: 'https://docs.openalgo.in', label: 'Docs', icon: BookOpen },
+  docs: { href: 'https://docs.openalgo.in', label: 'Docs', icon: FileText },
 }
 
 // Shared utility to check if a route is active.

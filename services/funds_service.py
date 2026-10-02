@@ -108,7 +108,13 @@ def get_funds(
     if broker != "binance_demo" and (get_analyze_mode() or broker == "sandbox"):
         from services.sandbox_service import sandbox_get_funds
         data = original_data or ({"apikey": api_key} if api_key else {})
-        return sandbox_get_funds(api_key or "openalgo_admin", data)
+        user_key = api_key
+        if not user_key:
+            if auth_token and ("usd" in str(auth_token).lower()):
+                user_key = "openalgo_usd"
+            else:
+                user_key = "openalgo_admin"
+        return sandbox_get_funds(user_key, data)
 
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:

@@ -1,0 +1,9 @@
+{
+    "Plugin Name": "binance_demo",
+    "Plugin URI": "https://openalgo.in",
+    "Description": "Binance OpenAlgo Plugin - Spot and USD-M Futures (demo / testnet)",
+    "Version": "1.0",
+    "supported_exchanges": ["CRYPTO"],
+    "broker_type": "crypto",
+    "leverage_config": false
+}

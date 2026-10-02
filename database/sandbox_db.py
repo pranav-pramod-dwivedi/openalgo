@@ -77,14 +77,14 @@ class SandboxOrders(Base):
     exchange = Column(String(20), nullable=False, index=True)
     action = Column(String(10), nullable=False)  # BUY or SELL
     quantity = Column(Integer, nullable=False)
-    price = Column(DECIMAL(10, 2), nullable=True)  # Null for market orders
-    trigger_price = Column(DECIMAL(10, 2), nullable=True)  # For SL and SL-M orders
+    price = Column(DECIMAL(16, 5), nullable=True)  # Null for market orders
+    trigger_price = Column(DECIMAL(16, 5), nullable=True)  # For SL and SL-M orders
     price_type = Column(String(20), nullable=False)  # MARKET, LIMIT, SL, SL-M
     product = Column(String(20), nullable=False)  # CNC, NRML, MIS
     order_status = Column(
         String(20), nullable=False, default="open", index=True
     )  # open, trigger pending, complete, cancelled, rejected
-    average_price = Column(DECIMAL(10, 2), nullable=True)  # Filled price
+    average_price = Column(DECIMAL(16, 5), nullable=True)  # Filled price
     filled_quantity = Column(Integer, default=0)  # Always 0 or quantity (no partial fills)
     pending_quantity = Column(Integer, nullable=False)  # Remaining quantity
     rejection_reason = Column(Text, nullable=True)
@@ -127,7 +127,7 @@ class SandboxTrades(Base):
     exchange = Column(String(20), nullable=False, index=True)
     action = Column(String(10), nullable=False)  # BUY or SELL
     quantity = Column(Integer, nullable=False)
-    price = Column(DECIMAL(10, 2), nullable=False)  # Execution price
+    price = Column(DECIMAL(16, 5), nullable=False)  # Execution price
     product = Column(String(20), nullable=False)  # CNC, NRML, MIS
     strategy = Column(String(100), nullable=True)
     trade_timestamp = Column(DateTime, nullable=False, default=func.now())
@@ -149,10 +149,10 @@ class SandboxPositions(Base):
     exchange = Column(String(20), nullable=False, index=True)
     product = Column(String(20), nullable=False)  # CNC, NRML, MIS
     quantity = Column(Integer, nullable=False)  # Net quantity (can be negative for short)
-    average_price = Column(DECIMAL(10, 2), nullable=False)  # Average entry price
+    average_price = Column(DECIMAL(16, 5), nullable=False)  # Average entry price
 
     # MTM tracking
-    ltp = Column(DECIMAL(10, 2), nullable=True)  # Last traded price
+    ltp = Column(DECIMAL(16, 5), nullable=True)  # Last traded price
     pnl = Column(
         DECIMAL(10, 2), default=0.00
     )  # Current P&L (unrealized for open, realized for closed)

@@ -1314,24 +1314,18 @@ def get_dashboard_data():
         margin_data = binance_demo_service.get_margin_data()
         return jsonify({"status": "success", "data": margin_data})
 
-    from database.settings_db import get_analyze_mode
-    if get_analyze_mode():
-        from database.auth_db import get_api_key_for_tradingview, upsert_api_key
-        from blueprints.apikey import generate_api_key
-        from services.funds_service import get_funds
-
-        api_key = get_api_key_for_tradingview(login_username)
-        if not api_key:
-            api_key = generate_api_key()
-            upsert_api_key(login_username, api_key)
-
-        success, response, status_code = get_funds(api_key=api_key)
-        if success:
-            return jsonify(response), 200
-        else:
-            return jsonify({"status": "error", "message": response.get("message", "Failed to get funds")}), status_code
-
     broker = session.get("broker")
+
+    from database.settings_db import get_analyze_mode
+    if get_analyze_mode() or broker == "sandbox" or session.get("mode") == "analyze" or "openalgo" in str(login_username).lower():
+        from sandbox.fund_manager import get_user_funds
+        user_id = "openalgo_usd" if ("usd" in str(login_username).lower()) else "openalgo_admin"
+        funds = get_user_funds(user_id)
+        if funds:
+            return jsonify({"status": "success", "data": funds, "mode": "analyze"}), 200
+        else:
+            return jsonify({"status": "error", "message": "Failed to get sandbox funds"}), 500
+
     if not broker:
         return jsonify({"status": "error", "message": "Broker not set in session"}), 400
 

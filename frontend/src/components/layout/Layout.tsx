@@ -9,11 +9,11 @@ export function Layout() {
   const { isAuthenticated, user } = useAuthStore()
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />
+    return <Navigate to="/dashboard" replace />
   }
 
   if (!user?.broker) {
-    return <Navigate to="/broker" replace />
+    return <Navigate to="/dashboard" replace />
   }
 
   return (

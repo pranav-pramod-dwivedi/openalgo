@@ -7,8 +7,8 @@ import { Navbar } from './Navbar'
 vi.mock('@/hooks/useProfileMenuItems', () => ({
   useProfileMenuItems: () => [
     {
-      href: '/profile',
-      label: 'Profile',
+      href: '/apikey',
+      label: 'API Key',
       icon: () => null,
     },
   ],
@@ -53,26 +53,26 @@ describe('Navbar', () => {
 
     const sheet = await screen.findByRole('dialog', { name: 'Navigation Menu' })
     const trading = within(sheet).getByRole('link', { name: 'Trading' })
-    const platforms = within(sheet).getByRole('link', { name: 'Platforms' })
+    const agent = within(sheet).getAllByRole('link', { name: 'Agent' })[0]
 
     expect(trading).toHaveAttribute('aria-current', 'page')
-    expect(platforms).not.toHaveAttribute('aria-current')
+    expect(agent).not.toHaveAttribute('aria-current')
     expect(currentLinks(sheet)).toEqual([trading])
   })
 
   it('marks the active quick-access sheet link as current', async () => {
     const user = userEvent.setup()
-    renderNavbar('/profile')
+    renderNavbar('/apikey')
 
     await user.click(screen.getByRole('button', { name: 'Toggle menu' }))
 
     const sheet = await screen.findByRole('dialog', { name: 'Navigation Menu' })
-    const profile = within(sheet).getByRole('link', { name: 'Profile' })
+    const apiKey = within(sheet).getByRole('link', { name: 'API Key' })
     const trading = within(sheet).getByRole('link', { name: 'Trading' })
 
-    expect(profile).toHaveAttribute('aria-current', 'page')
+    expect(apiKey).toHaveAttribute('aria-current', 'page')
     expect(trading).not.toHaveAttribute('aria-current')
-    expect(currentLinks(sheet)).toEqual([profile])
+    expect(currentLinks(sheet)).toEqual([apiKey])
   })
 })
 

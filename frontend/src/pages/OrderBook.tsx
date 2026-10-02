@@ -232,8 +232,9 @@ export default function OrderBook() {
 
   const fetchOrders = useCallback(
     async (showRefresh = false) => {
+      // No key yet (session still syncing): stay on the skeleton, never
+      // render a fake "no orders" empty state.
       if (!apiKey) {
-        setIsLoading(false)
         return
       }
 
@@ -355,6 +356,26 @@ export default function OrderBook() {
     const pt = modifyForm.pricetype
     const sendsPrice = pt === 'LIMIT' || pt === 'SL'
     const sendsTrigger = pt === 'SL' || pt === 'SL-M'
+
+    if (pt === 'MARKET') {
+      showToast.error('Market orders cannot be modified. Cancel and place a new order.', 'orders')
+      return
+    }
+    if (!Number.isFinite(modifyForm.quantity) || modifyForm.quantity <= 0) {
+      showToast.error('Quantity must be greater than 0', 'orders')
+      return
+    }
+    if (sendsPrice && (!Number.isFinite(modifyForm.price) || modifyForm.price <= 0)) {
+      showToast.error('Price must be greater than 0', 'orders')
+      return
+    }
+    if (
+      sendsTrigger &&
+      (!Number.isFinite(modifyForm.trigger_price) || modifyForm.trigger_price <= 0)
+    ) {
+      showToast.error('Trigger price must be greater than 0', 'orders')
+      return
+    }
 
     try {
       const response = await tradingApi.modifyOrder(modifyingOrder.orderid, {
@@ -995,7 +1016,19 @@ export default function OrderBook() {
             <Button variant="outline" onClick={() => setModifyDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleModifyOrder}>Modify Order</Button>
+            <Button
+              onClick={handleModifyOrder}
+              disabled={
+                modifyForm.pricetype === 'MARKET' ||
+                !(modifyForm.quantity > 0) ||
+                ((modifyForm.pricetype === 'LIMIT' || modifyForm.pricetype === 'SL') &&
+                  !(modifyForm.price > 0)) ||
+                ((modifyForm.pricetype === 'SL' || modifyForm.pricetype === 'SL-M') &&
+                  !(modifyForm.trigger_price > 0))
+              }
+            >
+              Modify Order
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
