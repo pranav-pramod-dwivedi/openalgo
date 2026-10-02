@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#f5f5f3" />
+    <meta name="description" content="PranavPay — the quiet control surface for autonomous capital." />
+    <link rel="stylesheet" href="/styles.css?v=20261002-9" />
+    <title>PranavPay — Quick overview</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23000'/%3E%3Cpath d='M21 16h14c9 0 15 5 15 13s-6 13-15 13h-6v7h-8V16Zm8 8v10h5c5 0 8-2 8-5s-3-5-8-5h-5Z' fill='%23fff'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Primary navigation">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true"><span></span><i></i></div>
+          <div class="brand-name">PranavPay</div>
+        </div>
+
+        <div class="rail-label">Workspace</div>
+        <nav class="nav-stack" aria-label="Workspace">
+          <button class="nav-item active" data-section="Quick overview" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg>
+            <span>Quick overview</span>
+          </button>
+          <button class="nav-item" data-section="Wallet" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h13a1.5 1.5 0 0 1 1.5 1.5v10A2.5 2.5 0 0 1 18 19H6a2.5 2.5 0 0 1-2.5-2.5v-9Z"/><path d="M4 8h15.5M16 13h4.5"/><circle cx="16" cy="13" r="1" fill="currentColor" stroke="none"/></svg>
+            <span>Wallet</span>
+          </button>
+          <button class="nav-item" data-section="Transactions" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h9"/><path d="m16 15 3 2.5-3 2.5"/></svg>
+            <span>Transactions</span>
+          </button>
+          <button class="nav-item" data-section="Manage" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="4"/></svg>
+            <span>Manage</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-spacer"></div>
+        <div class="rail-label">Account</div>
+        <button class="profile-card" type="button" data-action="profile">
+          <div class="avatar">AS</div>
+          <div class="profile-copy"><strong>pranav dwivedi</strong><span>Personal account</span></div>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="mobile-brand"><div class="brand-mark small" aria-hidden="true"><span></span><i></i></div><span>PranavPay</span></div>
+          <div class="breadcrumb"><span>Workspace</span><span class="slash">/</span><strong id="pageLabel">Quick overview</strong></div>
+          <div class="topbar-actions">
+            <button class="icon-button notification-button" type="button" data-action="notifications" aria-label="Notifications"><span class="notification-dot"></span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4"/></svg>
+            </button>
+            <div class="market-status"><span class="status-pulse"></span><span>Markets open</span></div>
+          </div>
+        </header>
+
+        <div class="mobile-toolbar" aria-label="Mobile workspace navigation">
+          <div class="mobile-toolbar-track">
+            <button class="mobile-toolbar-item active" data-section="Quick overview" type="button">Quick overview</button>
+            <button class="mobile-toolbar-item" data-section="Wallet" type="button">Wallet</button>
+            <button class="mobile-toolbar-item" data-section="Transactions" type="button">Transactions</button>
+            <button class="mobile-toolbar-item" data-section="Manage" type="button">Manage</button>
+          </div>
+          <button class="mobile-toolbar-action" type="button" data-action="export" aria-label="Export report"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M8 11l4 4 4-4M5 19h14"/></svg></button>
+        </div>
+
+        <div class="content-wrap page-view is-visible" id="quickOverviewPage" data-page="Quick overview">
+          <section class="page-intro">
+            <div>
+              <p class="eyebrow"><span id="dateLabel">Thursday, October 2, 2026</span> <span class="eyebrow-line"></span> <span id="timeLabel">09:41 AM</span></p>
+              <h1><span id="greetingLabel">Good morning</span>, pranav<span class="period">.</span></h1>
+              <p class="intro-copy" id="introCopy">Your capital is working quietly in the background.</p>
+            </div>
+            <button class="ghost-button" type="button" data-action="export"><span>Export report</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M8 11l4 4 4-4M5 19h14"/></svg></button>
+          </section>
+
+          <section class="control-strip" aria-label="Trading controls">
+            <div class="control-strip-intro"><span class="card-label">Control center</span><strong>Every control, one considered move.</strong></div>
+            <div class="control-actions">
+              <button class="control-button command-button" type="button" data-control="command"><span>⌘</span> Command palette</button>
+            </div>
+          </section>
+
+          <section class="overview-grid" aria-label="Portfolio overview">
+            <article class="balance-card surface-card">
+              <div class="card-topline"><span class="card-label">Total balance</span><button class="more-button" type="button" aria-label="More balance options" data-action="balance-menu"><span></span><span></span><span></span></button></div>
+              <div class="balance-value">$148,240<span class="decimal">.80</span></div>
+              <div class="balance-change"><span class="change-symbol">↗</span><strong>+$4,820.55</strong><span>(3.36%)</span><span class="change-period">Today</span></div>
+              <div class="balance-footer"><span>Updated just now</span><span class="mini-chart" aria-label="Balance trending upward"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
+            </article>
+
+            <article class="metric-card surface-card">
+              <div class="card-label">Buying power</div>
+              <div class="metric-value">$42,180<span class="decimal">.90</span></div>
+              <div class="metric-foot"><span>Available to trade</span><span class="metric-glyph">↗</span></div>
+            </article>
+            <article class="metric-card surface-card">
+              <div class="card-label">Invested</div>
+              <div class="metric-value">$106,059<span class="decimal">.90</span></div>
+              <div class="metric-foot"><span>71.6% of portfolio</span><span class="metric-glyph">↗</span></div>
+            </article>
+            <article class="metric-card surface-card risk-card">
+              <div class="card-label">Portfolio risk</div>
+              <div class="metric-value risk-value"><span class="risk-ring"></span>Balanced</div>
+              <div class="metric-foot"><span>Within your comfort zone</span><span class="metric-glyph">→</span></div>
+            </article>
+          </section>
+
+          <section class="primary-grid">
+            <article class="chart-card surface-card">
+              <div class="section-heading">
+                <div><span class="card-label">Performance</span><h2>Portfolio growth</h2></div>
+                <div class="range-switcher" role="group" aria-label="Performance time range">
+                  <button type="button" class="range-button" data-range="1D">1D</button>
+                  <button type="button" class="range-button" data-range="1W">1W</button>
+                  <button type="button" class="range-button active" data-range="1M">1M</button>
+                  <button type="button" class="range-button" data-range="3M">3M</button>
+                  <button type="button" class="range-button" data-range="1Y">1Y</button>
+                </div>
+              </div>
+              <div class="chart-summary"><span class="chart-value">+$12,460.90</span><span class="chart-caption">since Sep 02, 2026</span></div>
+              <div class="chart-wrap">
+                <div class="y-axis"><span>$160k</span><span>$150k</span><span>$140k</span><span>$130k</span></div>
+                <svg class="performance-chart" viewBox="0 0 780 270" preserveAspectRatio="none" role="img" aria-label="Portfolio performance chart rising over one month">
+                  <defs><linearGradient id="chartShade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0.10"/><stop offset="1" stop-color="#000" stop-opacity="0"/></linearGradient></defs>
+                  <path class="chart-grid-line" d="M0 25H780M0 92H780M0 159H780M0 226H780"/>
+                  <path class="chart-area" d="M0 208 C32 202 41 181 71 188 S117 168 144 175 S185 143 214 157 S254 132 281 139 S326 117 352 130 S393 97 425 114 S468 83 493 90 S538 67 569 76 S614 38 641 52 S687 32 716 40 S752 18 780 25 L780 270 L0 270Z"/>
+                  <path class="chart-line" d="M0 208 C32 202 41 181 71 188 S117 168 144 175 S185 143 214 157 S254 132 281 139 S326 117 352 130 S393 97 425 114 S468 83 493 90 S538 67 569 76 S614 38 641 52 S687 32 716 40 S752 18 780 25"/>
+                  <circle class="chart-point" cx="780" cy="25" r="5"/>
+                </svg>
+                <div class="x-axis"><span>Sep 02</span><span>Sep 09</span><span>Sep 16</span><span>Sep 23</span><span>Oct 02</span></div>
+              </div>
+            </article>
+
+            <article class="ai-card">
+              <div class="ai-card-header"><div><span class="card-label inverse-label">Autopilot</span><h2>AI trading</h2></div><button class="more-button inverse-more" type="button" aria-label="More AI options" data-action="ai-menu"><span></span><span></span><span></span></button></div>
+              <div class="ai-orbit active" aria-hidden="true"><div class="orbit-ring ring-one"></div><div class="orbit-ring ring-two"></div><div class="orbit-core"><span class="core-glyph">P</span></div><div class="orbit-satellite"></div></div>
+              <div class="ai-status"><span class="ai-status-dot"></span><span id="aiStatusText">Trading actively</span></div>
+              <p class="ai-description" id="aiDescription">Scanning 18 markets for high-conviction opportunities. No action needed.</p>
+              <div class="ai-stats"><div><span>Last action</span><strong id="lastAction">Bought BTC</strong><small>2 min ago</small></div><div><span>Next review</span><strong>In 14 min</strong><small>Auto-scheduled</small></div></div>
+              <div class="ai-actions"><button class="inverse-button" type="button" id="pauseAi"><span class="pause-bars"></span><span id="pauseLabel">Pause AI</span></button><button class="outline-inverse-button" type="button" id="manageAi">Manage</button></div>
+            </article>
+          </section>
+
+          <section class="lower-grid">
+            <article class="positions-card surface-card">
+              <div class="section-heading compact-heading"><div><span class="card-label">Your assets</span><h2>Open positions <span class="heading-count">4</span></h2></div><button class="text-button" type="button" data-action="positions">View all <span>→</span></button></div>
+              <div class="table-wrap"><table><thead><tr><th>Asset</th><th>Position</th><th>Avg. price</th><th>Current value</th><th>Return</th><th></th></tr></thead><tbody>
+                <tr><td><div class="asset-cell"><span class="asset-icon">A</span><span><strong>Apple</strong><small>AAPL</small></span></div></td><td><strong>24 shares</strong><small class="muted-line">Long</small></td><td>$178.22</td><td>$4,582.32</td><td><strong>+18.45%</strong><small class="muted-line">+$714.20</small></td><td><button class="row-menu" type="button" aria-label="More Apple options" data-action="row-menu">•••</button></td></tr>
+                <tr><td><div class="asset-cell"><span class="asset-icon">₿</span><span><strong>Bitcoin</strong><small>BTC</small></span></div></td><td><strong>0.48 BTC</strong><small class="muted-line">Long</small></td><td>$61,440.00</td><td>$31,842.60</td><td><strong>+8.20%</strong><small class="muted-line">+$2,412.60</small></td><td><button class="row-menu" type="button" aria-label="More Bitcoin options" data-action="row-menu">•••</button></td></tr>
+                <tr><td><div class="asset-cell"><span class="asset-icon">E</span><span><strong>Ethereum</strong><small>ETH</small></span></div></td><td><strong>8.6 ETH</strong><small class="muted-line">Long</small></td><td>$2,718.60</td><td>$26,376.80</td><td><strong>+4.82%</strong><small class="muted-line">+$1,214.30</small></td><td><button class="row-menu" type="button" aria-label="More Ethereum options" data-action="row-menu">•••</button></td></tr>
+                <tr><td><div class="asset-cell"><span class="asset-icon">N</span><span><strong>NVIDIA</strong><small>NVDA</small></span></div></td><td><strong>38 shares</strong><small class="muted-line">Long</small></td><td>$126.18</td><td>$5,841.76</td><td><strong>+12.10%</strong><small class="muted-line">+$630.12</small></td><td><button class="row-menu" type="button" aria-label="More NVIDIA options" data-action="row-menu">•••</button></td></tr>
+              </tbody></table></div>
+            </article>
+
+            <article class="activity-card surface-card">
+              <div class="section-heading compact-heading"><div><span class="card-label">The paper trail</span><h2>Recent activity</h2></div><button class="text-button" type="button" data-action="activity">View all <span>→</span></button></div>
+              <div class="activity-list">
+                <div class="activity-item"><div class="activity-icon ai-activity">P</div><div class="activity-copy"><strong>AI bought Bitcoin</strong><span>0.04 BTC at $66,340</span></div><time>2m</time></div>
+                <div class="activity-item"><div class="activity-icon transfer-activity">↓</div><div class="activity-copy"><strong>Deposit completed</strong><span>+$5,000.00 from Chase •••• 2481</span></div><time>3h</time></div>
+                <div class="activity-item"><div class="activity-icon ai-activity">P</div><div class="activity-copy"><strong>AI trimmed Apple</strong><span>8 shares at $191.44</span></div><time>Yesterday</time></div>
+                <div class="activity-item"><div class="activity-icon system-activity">·</div><div class="activity-copy"><strong>Risk settings updated</strong><span>Balanced profile confirmed</span></div><time>Sep 30</time></div>
+              </div>
+            </article>
+          </section>
+
+          <section class="feature-grid" aria-label="AI intelligence and wallet controls">
+            <article class="feature-card surface-card decision-card">
+              <div class="section-heading compact-heading"><div><span class="card-label">AI transparency</span><h2>Decision timeline</h2></div><button class="text-button" type="button" data-control="timeline">Open log <span>→</span></button></div>
+              <div class="decision-list">
+                <div class="decision-entry"><button class="decision-item" type="button" data-decision="btc"><span class="decision-time">09:39</span><span class="decision-node active-node"></span><span class="decision-copy"><strong>Bought BTC</strong><small>Momentum signal · 87% confidence</small></span><span class="decision-arrow">⌄</span></button><div class="decision-detail" data-detail="btc"><div><span>Why now</span><strong>Momentum accelerated above the 20-day average.</strong></div><div><span>Signal stack</span><strong>Price momentum · portfolio fit · cash reserve</strong></div><div><span>Risk check</span><strong>Expected drawdown 1.4% · within guardrail</strong></div></div></div>
+                <div class="decision-entry"><button class="decision-item" type="button" data-decision="aapl"><span class="decision-time">09:16</span><span class="decision-node"></span><span class="decision-copy"><strong>Held AAPL</strong><small>Valuation signal · 72% confidence</small></span><span class="decision-arrow">⌄</span></button><div class="decision-detail" data-detail="aapl"><div><span>Why hold</span><strong>Valuation remains attractive while earnings momentum is intact.</strong></div><div><span>Signal stack</span><strong>Free cash flow · trend stability · sector weight</strong></div><div><span>Risk check</span><strong>Position size 4.2% · no rebalance needed</strong></div></div></div>
+                <div class="decision-entry"><button class="decision-item" type="button" data-decision="eth"><span class="decision-time">08:48</span><span class="decision-node"></span><span class="decision-copy"><strong>Trimmed ETH</strong><small>Volatility signal · 64% confidence</small></span><span class="decision-arrow">⌄</span></button><div class="decision-detail" data-detail="eth"><div><span>Why trim</span><strong>Volatility rose above the 30-day average.</strong></div><div><span>Signal stack</span><strong>Volatility · liquidity · crypto allocation</strong></div><div><span>Risk check</span><strong>Reduced exposure by 6% · cash reserve protected</strong></div></div></div>
+              </div>
+              <div class="strategy-summary"><span class="card-label">Current strategy</span><strong>Patient momentum</strong><p>Hold winners, trim volatility, keep 28% in cash.</p></div>
+            </article>
+
+            <article class="feature-card surface-card signals-card">
+              <div class="section-heading compact-heading"><div><span class="card-label">What AI sees</span><h2>Market signals</h2></div><span class="live-label"><span class="live-dot"></span> Live</span></div>
+              <div class="signal-list"><div class="signal-row"><span>BTC momentum</span><strong>Strong</strong><span class="signal-meter"><i style="width:88%"></i></span></div><div class="signal-row"><span>Rates pressure</span><strong>Neutral</strong><span class="signal-meter"><i style="width:52%"></i></span></div><div class="signal-row"><span>Volatility</span><strong>Contained</strong><span class="signal-meter"><i style="width:34%"></i></span></div><div class="signal-row"><span>Cash runway</span><strong>28 days</strong><span class="signal-meter"><i style="width:72%"></i></span></div></div>
+              <div class="planned-action"><span class="card-label">Next planned action</span><strong>Rebalance crypto exposure</strong><small>Reviewing in 14 minutes · approval not required</small></div>
+            </article>
+
+            <article class="feature-card surface-card wallet-feature-card">
+              <div class="section-heading compact-heading"><div><span class="card-label">Wallet</span><h2>Connected money</h2></div><button class="text-button" type="button" data-control="wallet">Manage <span>→</span></button></div>
+              <div class="connected-row"><span class="bank-glyph">C</span><span><strong>Chase Checking</strong><small>•••• 2481 · Connected</small></span><span class="connected-check">✓</span></div>
+              <div class="connected-row"><span class="bank-glyph crypto-glyph">₿</span><span><strong>Coinbase wallet</strong><small>0x7A…91B2 · Connected</small></span><span class="connected-check">✓</span></div>
+              <div class="wallet-actions"><button type="button" data-control="deposit">Deposit</button><button type="button" data-control="withdraw">Withdraw</button><button type="button" data-control="transfers">Transfers</button></div>
+            </article>
+
+            <article class="feature-card surface-card insights-card">
+              <div class="section-heading compact-heading"><div><span class="card-label">Portfolio intelligence</span><h2>Health & allocation</h2></div><button class="text-button" type="button" data-control="allocation">Details <span>→</span></button></div>
+              <div class="health-row"><div class="health-score">86<span>/100</span></div><div><strong>Healthy portfolio</strong><small>Well diversified for your profile</small></div><div class="health-ring"><span></span></div></div>
+              <div class="allocation-bars"><div><span>Equities <strong>46%</strong></span><i><b style="width:46%"></b></i></div><div><span>Crypto <strong>26%</strong></span><i><b style="width:26%"></b></i></div><div><span>Cash <strong>28%</strong></span><i><b style="width:28%"></b></i></div></div>
+              <div class="winners-row"><div><span class="card-label">Best today</span><strong>NVDA <em>+12.10%</em></strong></div><div><span class="card-label">Needs attention</span><strong>ETH <em>−2.18%</em></strong></div></div>
+              <div class="benchmark-row"><span class="card-label">AI performance vs market</span><div><span>PranavPay <strong>+3.36%</strong></span><span>S&amp;P 500 <strong>+1.12%</strong></span><span>BTC index <strong>+2.48%</strong></span></div></div>
+            </article>
+
+            <article class="feature-card surface-card alerts-feature-card">
+              <div class="section-heading compact-heading"><div><span class="card-label">Stay in the loop</span><h2>Alerts center</h2></div><button class="text-button" type="button" data-control="alerts">See all <span>→</span></button></div>
+              <div class="alert-list"><button class="alert-row" type="button" data-control="alert-detail"><span class="alert-icon">↘</span><span><strong>Low buying power</strong><small>Cash is below your $45k preference</small></span><time>Now</time></button><button class="alert-row" type="button" data-control="alert-detail"><span class="alert-icon">!</span><span><strong>Drawdown monitor</strong><small>Portfolio is 1.2% from its weekly high</small></span><time>12m</time></button><button class="alert-row" type="button" data-control="alert-detail"><span class="alert-icon">~</span><span><strong>Unusual activity</strong><small>ETH volatility is above its 30d average</small></span><time>32m</time></button></div>
+              <button class="weekly-summary" type="button" data-control="weekly"><span>Weekly summary is ready</span><span>Read report →</span></button>
+            </article>
+
+            <article class="feature-card surface-card calendar-card">
+              <div class="section-heading compact-heading"><div><span class="card-label">Performance history</span><h2>P&L calendar</h2></div><button class="text-button" type="button" data-control="calendar">Open <span>→</span></button></div>
+              <div class="calendar-grid"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span><i></i><i></i><i class="loss"></i><i></i><i></i><i class="muted-day"></i><i class="muted-day"></i><i></i><i></i><i></i><i class="loss"></i><i></i><i></i><i></i><i></i><i class="muted-day"></i><i></i><i></i><i></i><i class="loss"></i><i></i><i></i><i></i></div>
+              <div class="calendar-legend"><span><i class="positive-key"></i>Positive days</span><span><i class="negative-key"></i>Negative days</span></div>
+            </article>
+          </section>
+
+          <footer class="page-footer"><span>PranavPay <span class="footer-separator">·</span> Your money, in motion.</span></footer>
+        </div>
+
+        <div class="content-wrap page-view" id="walletPage" data-page="Wallet" hidden>
+          <section class="page-intro page-intro-inner"><div><p class="eyebrow">Wallet <span class="eyebrow-line"></span> Connected money</p><h1>Your money,<br><span class="period">within reach.</span></h1><p class="intro-copy">Fund, move, and understand every dollar before it moves.</p></div><button class="ghost-button" type="button" data-control="deposit"><span>Deposit funds</span><span>↗</span></button></section>
+          <section class="wallet-page-grid">
+            <article class="wallet-balance surface-card"><span class="card-label">Available balance</span><div class="wallet-balance-number">$42,180<span>.90</span></div><div class="wallet-balance-foot"><span>Ready to deploy</span><button class="dark-small-button" type="button" data-control="deposit">Deposit <span>↗</span></button></div></article>
+            <article class="wallet-balance surface-card wallet-invested"><span class="card-label">Invested balance</span><div class="wallet-balance-number">$106,059<span>.90</span></div><div class="wallet-balance-foot"><span>71.6% of portfolio</span><button class="outline-small-button" type="button" data-control="withdraw">Withdraw <span>↗</span></button></div></article>
+          </section>
+          <section class="wallet-page-grid wallet-lower-grid">
+            <article class="wallet-account-card surface-card"><div class="section-heading compact-heading"><div><span class="card-label">Funding sources</span><h2>Connected money</h2></div><button class="text-button" type="button" data-control="wallet">Manage <span>→</span></button></div><div class="connected-row"><span class="bank-glyph">C</span><span><strong>Chase Checking</strong><small>•••• 2481 · Connected</small></span><span class="connected-check">✓</span></div><div class="connected-row"><span class="bank-glyph crypto-glyph">₿</span><span><strong>Coinbase wallet</strong><small>0x7A…91B2 · Connected</small></span><span class="connected-check">✓</span></div><button class="connect-account" type="button" data-control="wallet">+ Connect another account</button></article>
+            <article class="wallet-transfer-card surface-card"><div class="section-heading compact-heading"><div><span class="card-label">Move money</span><h2>Deposit & withdraw</h2></div><span class="wallet-status"><span class="live-dot"></span> Instant</span></div><p>Move money between your connected accounts and PranavPay without losing the calm.</p><div class="wallet-actions wallet-actions-large"><button type="button" data-control="deposit">Deposit funds</button><button type="button" data-control="withdraw">Withdraw cash</button><button type="button" data-control="transfers">Transfer history</button></div></article>
+          </section>
+          <section class="wallet-ledger surface-card"><div class="section-heading compact-heading"><div><span class="card-label">Paper trail</span><h2>Latest transfers</h2></div><button class="text-button" type="button" data-control="transfers">View history <span>→</span></button></div><div class="transfer-ledger"><div class="transfer-line"><span class="activity-icon transfer-activity">↓</span><span><strong>Deposit completed</strong><small>Chase Checking •••• 2481</small></span><strong>+$5,000.00</strong><time>Today, 06:41</time></div><div class="transfer-line"><span class="activity-icon transfer-activity">↑</span><span><strong>Withdrawal completed</strong><small>Chase Checking •••• 2481</small></span><strong>−$2,000.00</strong><time>Sep 28, 14:20</time></div></div></section>
+        </div>
+
+        <div class="content-wrap page-view" id="transactionsPage" data-page="Transactions" hidden>
+          <section class="page-intro page-intro-inner"><div><p class="eyebrow">Transactions <span class="eyebrow-line"></span> Audit trail</p><h1>Every move,<br><span class="period">made legible.</span></h1><p class="intro-copy">A complete record of AI trades, transfers, and system decisions.</p></div><button class="ghost-button" type="button" data-control="export"><span>Export report</span><span>↗</span></button></section>
+          <section class="transaction-summary"><article class="metric-card surface-card"><span class="card-label">This month</span><div class="metric-value">$18,420<span class="decimal">.80</span></div><div class="metric-foot"><span>12 trades</span><span class="metric-glyph">↗</span></div></article><article class="metric-card surface-card"><span class="card-label">AI accuracy</span><div class="metric-value">82<span class="decimal">%</span></div><div class="metric-foot"><span>Last 30 days</span><span class="metric-glyph">↗</span></div></article><article class="metric-card surface-card"><span class="card-label">Fees paid</span><div class="metric-value">$24<span class="decimal">.18</span></div><div class="metric-foot"><span>0.02% of volume</span><span class="metric-glyph">→</span></div></article></section>
+          <section class="transaction-table-card surface-card"><div class="section-heading compact-heading"><div><span class="card-label">All activity</span><h2>Transactions</h2></div><div class="transaction-filters"><button class="filter-chip active" type="button">All</button><button class="filter-chip" type="button">AI trades</button><button class="filter-chip" type="button">Transfers</button></div></div><div class="full-ledger"><div class="ledger-header"><span>Activity</span><span>Details</span><span>Amount</span><span>Time</span></div><div class="ledger-row"><span><i class="ledger-icon dark-ledger">P</i><strong>AI bought Bitcoin</strong></span><span>0.04 BTC · Market order</span><strong>−$2,653.60</strong><time>2m ago</time></div><div class="ledger-row"><span><i class="ledger-icon">↓</i><strong>Deposit completed</strong></span><span>Chase Checking ·•••• 2481</span><strong>+$5,000.00</strong><time>3h ago</time></div><div class="ledger-row"><span><i class="ledger-icon dark-ledger">P</i><strong>AI trimmed Apple</strong></span><span>8 shares · Limit order</span><strong>+$1,531.52</strong><time>Yesterday</time></div><div class="ledger-row"><span><i class="ledger-icon">⚙</i><strong>Risk settings updated</strong></span><span>Balanced profile confirmed</span><strong>—</strong><time>Sep 30</time></div><div class="ledger-row"><span><i class="ledger-icon">↑</i><strong>Withdrawal completed</strong></span><span>Chase Checking ·•••• 2481</span><strong>−$2,000.00</strong><time>Sep 28</time></div></div></section>
+        </div>
+
+        <div class="content-wrap page-view" id="managePage" data-page="Manage" hidden>
+          <section class="page-intro page-intro-inner"><div><p class="eyebrow">Manage <span class="eyebrow-line"></span> Your rules</p><h1>Set the guardrails<br><span class="period">with clarity.</span></h1><p class="intro-copy">Your preferences shape how PranavPay watches, decides, and acts.</p></div><button class="ghost-button" type="button" data-control="command"><span>Command palette</span><span>⌘</span></button></section>
+          <section class="manage-grid"><article class="manage-hero ai-card"><div class="ai-card-header"><div><span class="card-label inverse-label">Autopilot</span><h2>AI trading control</h2></div><span class="live-label"><span class="live-dot"></span> Live</span></div><div class="manage-status-line"><div class="manage-status-number">18</div><div><strong>markets monitored</strong><small>Across equities, crypto, and macro signals</small></div></div><div class="manage-rule-list"><div><span>Trading mode</span><strong>Patient momentum</strong><button type="button" data-control="risk">Edit</button></div><div><span>Manual approval above</span><strong>$5,000</strong><button type="button" data-control="approval">Edit</button></div><div><span>Daily loss guard</span><strong>3% drawdown</strong><button type="button" data-control="risk">Edit</button></div></div><button class="inverse-button wide-manage-button" type="button" data-control="pause"><span class="pause-bars"></span><span>Pause AI trading</span></button></article><article class="manage-panel surface-card"><div class="section-heading compact-heading"><div><span class="card-label">Risk profile</span><h2>Boundaries</h2></div><button class="text-button" type="button" data-control="risk">Edit <span>→</span></button></div><div class="manage-toggle-list"><div><span><strong>Daily loss guard</strong><small>Pause after a 3% drawdown</small></span><button class="toggle on" type="button" data-toggle="manage-loss"></button></div><div><span><strong>Volatility filter</strong><small>Skip extreme market entries</small></span><button class="toggle on" type="button" data-toggle="manage-volatility"></button></div><div><span><strong>Cash reserve</strong><small>Keep at least 20% liquid</small></span><button class="toggle on" type="button" data-toggle="manage-cash"></button></div></div></article><article class="manage-panel surface-card"><div class="section-heading compact-heading"><div><span class="card-label">Notifications</span><h2>Alert preferences</h2></div><button class="text-button" type="button" data-control="alerts">Edit <span>→</span></button></div><div class="manage-toggle-list"><div><span><strong>AI trade notifications</strong><small>When AI opens or trims a position</small></span><button class="toggle on" type="button" data-toggle="manage-trades"></button></div><div><span><strong>Drawdown alerts</strong><small>When portfolio falls 2% in a day</small></span><button class="toggle on" type="button" data-toggle="manage-drawdown"></button></div><div><span><strong>Weekly summary</strong><small>Monday morning portfolio review</small></span><button class="toggle on" type="button" data-toggle="manage-weekly"></button></div></div></article></section>
+          <section class="manage-bottom-row"><article class="surface-card preference-card"><span class="card-label">Trade universe</span><h2>What AI can access</h2><div class="universe-tags"><span>US equities</span><span>Bitcoin</span><span>Ethereum</span><span>Cash equivalents</span><button type="button" data-control="approval">+ Add rule</button></div></article><article class="surface-card preference-card"><span class="card-label">Benchmarking</span><h2>Measure the signal</h2><p>Compare PranavPay against S&amp;P 500 and BTC index every week.</p><button class="text-button" type="button" data-control="allocation">View benchmark report <span>→</span></button></article></section>
+        </div>
+
+        <div class="content-wrap page-view" id="accountPage" data-page="Account settings" hidden>
+          <section class="page-intro page-intro-inner"><div><p class="eyebrow">Account <span class="eyebrow-line"></span> Personal settings</p><h1>Your account,<br><span class="period">your way.</span></h1><p class="intro-copy">Keep your identity, preferences, and access exactly where you want them.</p></div><button class="ghost-button" type="button" data-control="command"><span>Command palette</span><span>⌘</span></button></section>
+          <section class="account-settings-grid">
+            <article class="account-identity-card ai-card"><div class="account-identity-top"><div class="account-avatar-large">PD</div><div><span class="card-label inverse-label">Personal account</span><h2>pranav dwivedi</h2><p>PranavPay workspace</p></div></div><div class="account-identity-meta"><span>Member since</span><strong>September 2026</strong><span>Account ID</span><strong>PP-2048-PRANAV</strong></div><button class="inverse-button wide-manage-button" type="button" data-action="edit-profile">Edit profile</button></article>
+            <article class="account-settings-panel surface-card"><div class="section-heading compact-heading"><div><span class="card-label">Profile</span><h2>Personal details</h2></div><button class="text-button" type="button" data-action="edit-profile">Edit <span>→</span></button></div><div class="settings-list"><div><span><strong>Display name</strong><small>Shown across your PranavPay workspace</small></span><b>pranav dwivedi</b></div><div><span><strong>Email</strong><small>Primary notifications and approvals</small></span><b>pranav@pranavpay.com</b></div><div><span><strong>Timezone</strong><small>Used for reports and market reminders</small></span><b>Local time</b></div></div></article>
+            <article class="account-settings-panel surface-card"><div class="section-heading compact-heading"><div><span class="card-label">Preferences</span><h2>Workspace defaults</h2></div><button class="text-button" type="button" data-action="edit-preferences">Edit <span>→</span></button></div><div class="settings-list"><div><span><strong>Default landing page</strong><small>Where PranavPay opens each time</small></span><b>Quick overview</b></div><div><span><strong>Currency</strong><small>Portfolio values and reports</small></span><b>USD · $</b></div><div><span><strong>Motion & haptics</strong><small>Feedback for important actions</small></span><button class="toggle on" type="button" data-toggle="account-motion"></button></div></div></article>
+          </section>
+          <section class="account-lower-grid"><article class="account-settings-panel surface-card"><div class="section-heading compact-heading"><div><span class="card-label">Security</span><h2>Access & sessions</h2></div><button class="text-button" type="button" data-action="security">Review <span>→</span></button></div><div class="settings-list"><div><span><strong>Passkey</strong><small>Protect this workspace with your device</small></span><b>Enabled</b></div><div><span><strong>Recent sessions</strong><small>Chrome on this device · Active now</small></span><b>1 active</b></div></div></article><article class="account-settings-panel surface-card"><div class="section-heading compact-heading"><div><span class="card-label">Communication</span><h2>What reaches you</h2></div><button class="text-button" type="button" data-control="alerts">Edit <span>→</span></button></div><div class="settings-list"><div><span><strong>Trade approvals</strong><small>Push and email when AI needs you</small></span><button class="toggle on" type="button" data-toggle="account-approvals"></button></div><div><span><strong>Weekly summaries</strong><small>A calm review every Monday</small></span><button class="toggle on" type="button" data-toggle="account-summary"></button></div></div></article></section>
+        </div>
+      </main>
+    </div>
+
+    <nav class="mobile-nav" aria-label="Mobile navigation">
+      <button class="mobile-nav-item active" data-section="Quick overview" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg><span>Quick view</span></button>
+      <button class="mobile-nav-item" data-section="Wallet" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h13a1.5 1.5 0 0 1 1.5 1.5v10A2.5 2.5 0 0 1 18 19H6a2.5 2.5 0 0 1-2.5-2.5v-9Z"/><path d="M4 8h15.5M16 13h4.5"/></svg><span>Wallet</span></button>
+      <button class="mobile-nav-item" data-section="Transactions" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h9"/><path d="m16 15 3 2.5-3 2.5"/></svg><span>Activity</span></button>
+      <button class="mobile-nav-item" data-section="Manage" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="4"/></svg><span>Manage</span></button>
+    </nav>
+    <div class="modal-backdrop" id="modalBackdrop" hidden>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <button class="modal-close" type="button" data-close-modal aria-label="Close">×</button>
+        <span class="card-label" id="modalEyebrow">Control center</span>
+        <h2 id="modalTitle">Risk controls</h2>
+        <p id="modalDescription">Tune the rules your AI follows before it takes its next action.</p>
+        <div id="modalBody" class="modal-body"></div>
+        <div class="modal-actions"><button class="modal-secondary" type="button" data-close-modal>Cancel</button><button class="modal-primary" type="button" id="modalConfirm">Save changes</button></div>
+      </section>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"><span class="toast-mark">✓</span><span id="toastText">Saved</span></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
