@@ -83,12 +83,12 @@ def trading_cycle() -> None:
         sig = fn(c, **json.loads(s["params"]))
         if sig:
             state = f"{symbol} {s['family']} signal={sig} last={float(c[-1]['close']):.2f} regime={json.loads(s['metrics']).get('net_pnl', 0)}"
-            verdict = jev.ask(state, {"trade": {"type": "score", "criteria": ["skip", "take"]}})
+            verdict = jev.ask(state, {"trade": {"type": "score", "criteria": ["skip", "take"]}, "risk": {"type": "score", "criteria": ["safe", "risky"]}})
             db.log("jev", {"symbol": symbol, "state": state, "verdict": verdict})
             if (
                 verdict
                 and verdict.get("answers", {}).get("trade", {}).get("probabilities", {}).get("1", 0)
-                < 0.55
+                < 0.30
             ):
                 continue
         with db.conn() as cc:
