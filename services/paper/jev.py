@@ -5,14 +5,22 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# The worker's Zen key lives in .env (gitignored) so no key is ever committed.
+# OPENCODE_API_KEY wins, then PAPER_JEV_API_KEY, then the opencode CLI's own auth.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 AUTH_PATH = os.path.expanduser("~/.local/share/opencode/auth.json")
 ZEN_URL = "https://opencode.ai/zen/v1/systemone"
 
 
 def _key() -> str | None:
-    if os.getenv("OPENCODE_API_KEY"):
-        return os.getenv("OPENCODE_API_KEY")
+    for var in ("OPENCODE_API_KEY", "PAPER_JEV_API_KEY"):
+        if os.getenv(var):
+            return os.getenv(var)
     try:
         data = json.loads(open(AUTH_PATH).read())
         return data.get("opencode", {}).get("key")
