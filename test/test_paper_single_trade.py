@@ -4,11 +4,18 @@ These tests pin the rule the paper console exists to keep: a trade command place
 AT MOST ONE trade per invocation. Not one per symbol, not one per retry, not one
 per loop tick -- one, and then it exits.
 
-Everything runs against a temporary paper database with mocked candles and a
+Everything runs against a temporary paper database with a synthetic market and a
 mocked analyst, so no network call is made and the real ``data/paper.db`` is
 never opened. ``PAPER_DB`` is pointed at a scratch path before anything imports
 ``services.paper.db`` as well as per test, so an import-order accident cannot
 reach live state.
+
+The market is synthetic for the same reason every paper fixture's is. Placing one
+of these trades runs the independent verifier against the live quote and then
+fills the order against the real bid and ask, and a ladder closing at 129.50 is
+not what either of them is looking at. ``install_market`` serves all three reads
+-- the candles the planner plans from, the quote it is checked against and the
+book it is filled off -- from one ladder, so they cannot disagree.
 
 The cases:
 
@@ -80,7 +87,6 @@ def candles(closes):
                 "low": close * 0.998,
                 "close": close,
                 "volume": 1000.0 + i,
-                "time": time.time() - (len(closes) - i) * 60,
             }
         )
     return out
@@ -95,6 +101,77 @@ ANALYST_VERDICT = {
         "quality": {"probabilities": {"0": 0.39, "1": 0.61}},
     }
 }
+
+
+# ---------------------------------------------------------- the synthetic book
+#
+# One ladder per symbol, and every reader of the market gets the same one: the
+# candles the planner plans from, the quote the verifier checks a plan's prices
+# against, the history it age-checks, and the bid and ask the execution model
+# crosses. The book is two-sided with a real spread either side of the mid, so
+# there is a book to cross and a day of volume to measure the order against
+# rather than one price wearing two names. The shape is ``fetch_crypto_quote``'s,
+# so the stub cannot pass either module by carrying something the real feed never
+# sends.
+
+#: A major on Binance sits a couple of basis points wide; the paper account
+#: refuses a book wider than ``execution.DEFAULT_MAX_SPREAD_BPS``.
+BOOK_SPREAD_BPS = 3.0
+
+
+def book_from(ladder, *, spread_bps=BOOK_SPREAD_BPS, volume=None):
+    """A two-sided quote for exactly the world ``ladder`` describes.
+
+    The mid is the newest close, and the volume is the day's worth of this
+    ladder -- what a rolling 24h figure is -- so an ordinary paper order is a
+    rounding error of the market it crosses.
+    """
+    mid = float(ladder[-1]["close"])
+    half = spread_bps / 20_000.0
+    return {
+        "ltp": mid,
+        "bid": round(mid * (1.0 - half), 8),
+        "ask": round(mid * (1.0 + half), 8),
+        "open": float(ladder[0]["open"]),
+        "high": round(max(float(bar["high"]) for bar in ladder), 8),
+        "low": round(min(float(bar["low"]) for bar in ladder), 8),
+        "prev_close": float(ladder[-2]["close"]),
+        "volume": float(volume) if volume is not None else float(sum(bar["volume"] for bar in ladder)),
+        "oi": 0.0,
+    }
+
+
+def install_market(monkeypatch, ladders, *, age=0.0, interval=300.0):
+    """Serve every read of the market from one ladder per symbol.
+
+    The clock is stamped here rather than in the ladder so the bars cannot go
+    stale while a long suite works its way to them: the verifier age-checks the
+    history and would read a ladder built at import time for exactly what it is.
+    Written in milliseconds, as crypto feeds send it.
+    """
+    now = time.time()
+    world = {}
+    for symbol, ladder in ladders.items():
+        bars = []
+        for i, bar in enumerate(ladder):
+            copied = dict(bar)
+            copied["time"] = (now - age - (len(ladder) - 1 - i) * interval) * 1000.0
+            bars.append(copied)
+        world[str(symbol).upper()] = bars
+    books = {symbol: book_from(bars) for symbol, bars in world.items()}
+
+    monkeypatch.setattr(engine, "_candles", lambda s, interval="5m": world.get(s, []))
+
+    def get_quote(symbol, exchange):
+        book = books.get(str(symbol).upper())
+        return dict(book) if book else None
+
+    def get_history(symbol, exchange, iv="5m", start_date="", end_date=""):
+        return list(world.get(str(symbol).upper(), []))
+
+    monkeypatch.setattr("services.foreign_data_service.get_foreign_quote", get_quote)
+    monkeypatch.setattr("services.foreign_data_service.get_foreign_history", get_history)
+    return books
 
 
 @pytest.fixture
@@ -114,11 +191,23 @@ def paper(tmp_path, monkeypatch):
         {
             "starting_cash": 1000.0,
             "cash": 1000.0,
-            "max_position_qty": 0.01,
+            # The verifier's per-position ceiling, in coins. Every installation
+            # still carries this key at the pre-resize 0.01 -- the flat quantity
+            # the sizing rule was written to stop reading -- which at this world's
+            # price is 1.29 USD and would refuse every position this account can
+            # open. One coin is a real limit here and sits well above the largest
+            # position the notional cap allows.
+            "max_position_qty": 1.0,
             "max_exposure_pct": 0.2,
             "fee_bps": 4.0,
             "slippage_bps": 2.0,
-            "max_daily_loss": 20.0,
+            # The daily-loss guard is a rule of its own with its own tests. It
+            # measures the live ledger against the equity pinned at the start of
+            # the day, and several of the cases below deliberately open one
+            # position per cycle, so any loss they accumulate could decide how many
+            # cycles run and quietly answer the question each case is asking.
+            # Lifted clear of the whole balance.
+            "max_daily_loss": 1000.0,
             "short_margin_locked": 0.0,
         }
     )
@@ -127,7 +216,7 @@ def paper(tmp_path, monkeypatch):
     paper_run.set_armed(False)
     for symbol in WATCHLIST:
         register(symbol)
-    monkeypatch.setattr(engine, "_candles", lambda s, interval="5m": RISING)
+    install_market(monkeypatch, dict.fromkeys(WATCHLIST, RISING))
     monkeypatch.setattr(engine, "research_cycle", lambda *a, **k: None)
     # An analyst that would answer if it were asked. Silence plus
     # --allow-rules-only is the unreviewed path; whether it answers or not, the
@@ -509,8 +598,13 @@ def _console_trade_path(tmp_path: Path, tag: str = "one") -> str:
     no environment is synced, no worker is really started and the trade itself
     goes through the real ``profitable_trade`` with the market data and the
     analyst stubbed (the wrapper is test-side; no production hook is involved).
-    ``tag`` keeps each invocation's logs separate while they share one scratch
-    database, which is how two commands in a row are compared.
+    The wrapper is handed the same synthetic world this module's fixture builds:
+    one ladder, stamped with a clock, quoted three basis points wide around its
+    newest close, with the day's volume behind it. Placing the trade runs the
+    independent verifier against that quote and then fills against that book, so
+    all three of its reads have to agree about what the market is or nothing is
+    placed. ``tag`` keeps each invocation's logs separate while they share one
+    scratch database, which is how two commands in a row are compared.
     """
     work = tmp_path / tag
     work.mkdir(exist_ok=True)
@@ -526,12 +620,24 @@ def _console_trade_path(tmp_path: Path, tag: str = "one") -> str:
         f"spec = importlib.util.spec_from_file_location('pt', {str(REPO_ROOT / 'scripts/profitable_trade.py')!r})\n"
         "pt = importlib.util.module_from_spec(spec)\n"
         "spec.loader.exec_module(pt)\n"
+        "import services.foreign_data_service as fds\n"
         "from services.paper import engine, planner\n"
         "closes = [100.0 + i * 0.5 for i in range(60)]\n"
-        "engine._candles = lambda s, interval='5m': [\n"
+        "now = time.time()\n"
+        "bars = [\n"
         "    {'open': c, 'high': c * 1.002, 'low': c * 0.998, 'close': c,\n"
-        "     'volume': 1000.0 + i, 'time': time.time() - (60 - i) * 60}\n"
-        "    for i, c in enumerate(closes)]\n"
+        "     'volume': 1000.0 + i, 'time': (now - (len(closes) - 1 - i) * 300.0) * 1000.0}\n"
+"    for i, c in enumerate(closes)]\n"
+        "mid = closes[-1]\n"
+        "half = 3.0 / 20000.0\n"
+        "book = {\n"
+        "    'ltp': mid, 'bid': round(mid * (1 - half), 8), 'ask': round(mid * (1 + half), 8),\n"
+        "    'open': closes[0], 'high': max(b['high'] for b in bars),\n"
+        "    'low': min(b['low'] for b in bars), 'prev_close': closes[-2],\n"
+        "    'volume': sum(b['volume'] for b in bars), 'oi': 0.0}\n"
+        "engine._candles = lambda s, interval='5m': bars\n"
+        "fds.get_foreign_quote = lambda symbol, exchange: dict(book)\n"
+        "fds.get_foreign_history = lambda symbol, exchange, interval='5m', s='', e='': list(bars)\n"
         "planner.jev.ask = lambda *a, **k: None\n"
         "log = os.environ['PLANNER_LOG']\n"
         "real_plan, real_execute = planner.plan, planner.execute\n"
@@ -607,11 +713,16 @@ def _seed_console_db(tmp_path: Path) -> Path:
             {
                 "starting_cash": 1000.0,
                 "cash": 1000.0,
-                "max_position_qty": 0.01,
+                # The verifier's per-position ceiling, in coins. See the fixture
+                # of the same name for why this is not the 0.01 every
+                # installation still carries.
+                "max_position_qty": 1.0,
                 "max_exposure_pct": 0.2,
                 "fee_bps": 4.0,
                 "slippage_bps": 2.0,
-                "max_daily_loss": 20.0,
+                # See the fixture of the same name: the console's own trades are
+                # not about the daily-loss guard.
+                "max_daily_loss": 1000.0,
                 "short_margin_locked": 0.0,
             }
         )

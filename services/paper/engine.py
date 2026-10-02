@@ -49,7 +49,36 @@ DEFAULT_CASH = 100.0
 #   * BUY  (opening a long, or covering a short)  cash -= price*qty + fee
 #   * SELL (closing a long, or opening a short)   cash += price*qty - fee
 #
-# equity = cash + unrealized - short_margin_locked
+# The identity
+# ------------
+#     equity = cash + long_capital + unrealized - short_margin_locked
+#
+# over the open positions and their live marks:
+#
+#   * ``cash``               the live balance, moved by every fill as above.
+#   * ``long_capital``       the entry notional of every open long,
+#                            ``sum(qty * entry)`` over the ``BUY`` rows.
+#   * ``unrealized``         the open P&L of the whole book: ``(mark - entry) * qty``
+#                            on a long, ``(entry - mark) * qty`` on a short.
+#   * ``short_margin_locked`` the entry notional of every open short,
+#                            ``sum(qty * entry)`` over the ``SELL`` rows.
+#
+# That is the same statement as "cash, plus the longs at their live mark, plus the
+# shorts' unrealised P&L, less the margin locked against them", because a long at
+# its mark is its entry capital plus the change since the entry, and the change is
+# already inside ``unrealized``. It is split the other way round on purpose:
+# ``unrealized`` is the figure the equity row, the chart and the dashboard publish,
+# so the identity has to hold using the numbers that are actually reported.
+#
+# Why ``long_capital`` is a term at all: a long spends cash and owns an asset. Its
+# notional leaves the balance at the entry and comes back only through
+# ``unrealized``, which is about zero at that moment, so an equity defined without
+# it treats the position's own size as a permanent loss. A 100 USD account that
+# opened a 42 USD long reported 57.73 of equity, kept reporting it, and the
+# daily-loss guard read the drop as a real loss and halted the account for the day
+# while it held no position at all. Opening and closing a position at the same
+# price now leaves equity unchanged apart from fees and slippage, in both
+# directions, on a full fill and on a partial one.
 #
 # Short margin convention: a short entry credits the full sale proceeds to cash,
 # because that is what a broker credits, and simultaneously posts the full entry
@@ -57,7 +86,8 @@ DEFAULT_CASH = 100.0
 # spendable -- it is the margin backing the short -- and it is released when the
 # short is covered. It is also excluded from equity, otherwise the sale proceeds
 # would be counted twice: once inside ``cash`` and once through ``unrealized``.
-# With no short open the lock is zero and equity is exactly cash + unrealized.
+# With no short open the lock is zero and equity is exactly
+# ``cash + long_capital + unrealized``.
 #
 # Realized P&L and fees keep their own running totals for the dashboard. They are
 # reporting figures, never inputs to equity.
@@ -77,10 +107,159 @@ def _cash_state(cfg: dict) -> tuple[float, float]:
     return cash, float(cfg.get("short_margin_locked", 0.0))
 
 
-def equity_of(cfg: dict, unrealized: float) -> float:
-    """Equity is the live cash plus open P&L, less margin locked against shorts."""
+#: The capital the open longs have tied up, as one sum. See the conventions above
+#: for why this is a term of the identity and not part of ``unrealized``.
+LONG_CAPITAL_SQL = (
+    "SELECT COALESCE(SUM(qty * entry), 0.0) AS capital FROM positions"
+    " WHERE status='open' AND UPPER(side)='BUY'"
+)
+
+
+def open_long_capital(existing=None) -> float:
+    """The entry notional of every open long: ``sum(qty * entry)`` over the BUYs.
+
+    Read from the ``positions`` table rather than from a marking pass, for two
+    reasons. A caller that already holds the open P&L gets one number for the
+    whole identity without a second network round trip. And a long whose mark could
+    not be fetched still counts, at its entry value: it is an asset the account
+    holds and cannot price right now, not one that has evaporated.
+
+    Pass ``existing`` when the caller already holds the write connection. A second
+    connection blocks against a write transaction in SQLite, so a caller inside one
+    must not fall through to the default.
+    """
+    if existing is not None:
+        row = existing.execute(LONG_CAPITAL_SQL).fetchone()
+    else:
+        try:
+            with db.conn() as c:
+                row = c.execute(LONG_CAPITAL_SQL).fetchone()
+        except Exception:
+            logger.warning("could not read the open longs; equity will be short by their cost")
+            return 0.0
+    if row is None:
+        return 0.0
+    try:
+        return float(row["capital"])
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def equity_of(cfg: dict, unrealized: float, long_capital: float | None = None) -> float:
+    """What the account is worth: cash, the capital committed to open longs, the
+    open P&L, less the margin locked against open shorts.
+
+        equity = cash + long_capital + unrealized - short_margin_locked
+
+    ``unrealized`` is the open P&L of the whole book, both directions, which is the
+    figure the equity row and the dashboard report. ``long_capital`` is the open
+    longs at their entry notional; it is read from the ledger when it is not passed,
+    which is the path every caller in this repository takes. Pass it explicitly
+    only from inside a transaction that already holds the write connection.
+    """
     cash, locked = _cash_state(cfg)
-    return cash + unrealized - locked
+    if long_capital is None:
+        long_capital = open_long_capital()
+    return cash + long_capital + unrealized - locked
+
+
+def ledger_equity() -> float:
+    """Equity computed now, from the live ledger: cash, the open book at its marks,
+    less the margin locked against shorts.
+
+    No equity table and no cached total. This is what a risk rule has to read: the
+    chart's own rows are a record of what each cycle believed, and one wrong row in
+    that record must not be able to stand in for the account's actual state.
+    """
+    _marks, unrealized = mark_open_positions()
+    return equity_of(db.get_all(), unrealized)
+
+
+# ------------------------------------------------------------ the day's opening
+#
+# The daily-loss guard needs the equity the account held when the day began. It used
+# to read it as "the first row of the equity table today, minus the last", and that
+# table is also the chart: it gets one row per cycle, so a single row carrying a
+# number that was wrong for one cycle was enough to make first-minus-last read as a
+# loss the account never made. On a flat 100 USD account holding a 42 USD long that
+# was a 42 USD phantom loss, which reached the 20 USD limit and halted the account
+# for the day.
+#
+# So the opening figure is pinned in the config table, once per day, by
+# ``_record_equity`` -- which runs on every cycle, before anything can have been
+# lost -- and the guard compares the live ledger against that pin. The equity table
+# is left to do what a table is for.
+
+SECONDS_PER_DAY = 86400
+KEY_DAY_OPENING_EQUITY = "day_opening_equity"
+KEY_DAY_OPENING_DAY = "day_opening_day"
+
+
+def day_index(ts: float | None = None) -> int:
+    """Which UTC day a timestamp falls in. The boundary this guard has always used."""
+    return int((time.time() if ts is None else float(ts)) // SECONDS_PER_DAY)
+
+
+def _pinned_day() -> int | None:
+    """The UTC day index pinned in the config table, or None when none is.
+
+    ``None`` has to stay distinct from "today": ``day_index(None)`` means *now*, so
+    folding a missing key into that helper would silently declare every fresh
+    account already pinned and never write the figure at all.
+    """
+    try:
+        raw = db.get(KEY_DAY_OPENING_DAY)
+    except Exception:
+        logger.warning("could not read the day's opening equity")
+        return None
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def record_day_opening(equity: float, ts: float | None = None) -> None:
+    """Pin the equity this account held at the start of the day. Once per day.
+
+    The first ``_record_equity`` of a day pins the figure, which is before the day's
+    first fill on any cycle that both records and trades. A day rolling over pins
+    again, because the account's equity at the boundary is the next day's opening.
+    """
+    today = day_index(ts)
+    if _pinned_day() == today:
+        return
+    # Stored at full precision on purpose: this figure is compared against a limit,
+    # and rounding it here would move the measured loss by half a unit in the last
+    # place, which is exactly the size of difference a boundary case turns on.
+    db.set_many({KEY_DAY_OPENING_DAY: today, KEY_DAY_OPENING_EQUITY: float(equity)})
+
+
+def day_opening_equity() -> float | None:
+    """The equity pinned for the current UTC day, or None when none has been.
+
+    ``None`` is an honest "not established", not a zero. The first cycle of a day
+    has not run yet, or the installation predates the pin, or yesterday's pin is
+    still the one on record. Every caller must treat it as "no loss can be measured
+    here" rather than as "no loss happened": a guard with no opening figure has
+    nothing to measure against, and halting an account on a guess is the one thing
+    this rule must never do.
+    """
+    if _pinned_day() != day_index():
+        return None
+    try:
+        pinned = db.get(KEY_DAY_OPENING_EQUITY)
+    except Exception:
+        logger.warning("could not read the day's opening equity")
+        return None
+    if pinned is None:
+        return None
+    try:
+        value = float(pinned)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
 
 
 def available_cash(cfg: dict) -> float:
@@ -504,6 +683,27 @@ def mark_open_positions() -> tuple[list[dict], float]:
     return marks, unrealized
 
 
+class Marking(NamedTuple):
+    """One reading of the open book, in the shape the equity identity is defined on.
+
+    ``unrealized`` is the open P&L of the whole book and is the figure that gets
+    reported. ``long_capital`` is the open longs' committed notional, read from the
+    ledger so there is one source for it. Together with the live cash and the
+    locked margin, these are the whole identity; a caller inside its own
+    transaction passes ``long_capital`` in rather than reading the table again.
+    """
+
+    marks: list
+    unrealized: float
+    long_capital: float
+
+
+def mark_account() -> Marking:
+    """Mark the open book once and return it in the shape equity is defined on."""
+    marks, unrealized = mark_open_positions()
+    return Marking(marks, unrealized, open_long_capital())
+
+
 def strategy_id(family: str, symbol: str, interval: str) -> str:
     """Build a strategy id. The timeframe is part of it, not a note beside it.
 
@@ -921,14 +1121,20 @@ def trading_cycle(watchlist=None, interval=None) -> None:
 def _record_equity() -> dict:
     """Mark to market, carry realized/fees/peak forward, and append an equity row."""
     db.ensure_column("positions", "mark", "REAL")
-    marks, unrealized = mark_open_positions()
+    marking = mark_account()
+    marks, unrealized = marking.marks, marking.unrealized
     cfg = db.get_all()
     cash, locked = _cash_state(cfg)
+    long_capital = marking.long_capital
     realized = float(cfg.get("realized_total", 0.0))
     fees = float(cfg.get("fees_total", 0.0))
-    equity = equity_of(cfg, unrealized)
+    equity = equity_of(cfg, unrealized, long_capital)
     peak = max(float(cfg.get("peak_equity", 0.0)), equity)
     drawdown = (peak - equity) / peak * 100 if peak > 0 else 0.0
+    # Before the row is written, and on every cycle, so the daily-loss guard has a
+    # day's opening figure to measure against rather than borrowing one out of the
+    # table it is supposed to be independent of.
+    record_day_opening(equity)
     db.set_many(
         {
             "realized_total": realized,
@@ -946,6 +1152,7 @@ def _record_equity() -> dict:
         "marks": marks,
         "cash": cash,
         "equity": equity,
+        "long_capital": long_capital,
         "locked_margin": locked,
         "drawdown": drawdown,
         "peak": peak,
@@ -1033,11 +1240,40 @@ def _close(cc, pos, px, sid):
     return net
 
 
+def _recent_verdicts(limit: int = 20) -> list[dict] | None:
+    """Recent verifier verdicts, newest first, or None when unavailable."""
+    try:
+        from . import verifier
+
+        return verifier.recent(limit)
+    except Exception:
+        logger.warning("verifier verdicts unavailable", exc_info=True)
+        return None
+
+
+def _verdict_counts() -> tuple[int, int]:
+    """(allowed, denied) across recorded verdicts. (0, 0) when unreadable."""
+    try:
+        with db.conn() as c:
+            rows = c.execute("SELECT allow, COUNT(*) AS n FROM verdicts GROUP BY allow").fetchall()
+        allowed = denied = 0
+        for r in rows:
+            if r["allow"]:
+                allowed += r["n"]
+            else:
+                denied += r["n"]
+        return allowed, denied
+    except Exception:
+        logger.warning("verdict counts unavailable", exc_info=True)
+        return 0, 0
+
+
 def get_state() -> dict:
     """Everything the paper panel shows, read fresh from the paper database."""
     db.init()
     db.ensure_column("positions", "mark", "REAL")
-    marks, unrealized = mark_open_positions()
+    marking = mark_account()
+    marks, unrealized = marking.marks, marking.unrealized
     with db.conn() as c:
         fills = c.execute(
             "SELECT order_id,symbol,side,qty,price,fee,slippage,ts FROM fills"
@@ -1062,7 +1298,8 @@ def get_state() -> dict:
     starting = float(cfg.get("starting_cash", DEFAULT_CASH))
     realized = float(cfg.get("realized_total", 0.0))
     fees = float(cfg.get("fees_total", 0.0))
-    equity = equity_of(cfg, unrealized)
+    long_capital = marking.long_capital
+    equity = equity_of(cfg, unrealized, long_capital)
     peak = float(cfg.get("peak_equity", 0.0))
     return {
         # ``starting_cash`` is the capital the paper account started with and
@@ -1071,6 +1308,9 @@ def get_state() -> dict:
         "starting_cash": starting,
         "cash": round(cash, 6),
         "virtual_balance": round(cash, 6),
+        # The four terms of the identity, so a reader can check it here without
+        # guessing: equity == cash + long_capital + unrealized - short_margin_locked.
+        "long_capital": round(long_capital, 6),
         "short_margin_locked": round(locked, 6),
         "equity": round(equity, 6),
         "realized": round(realized, 6),
@@ -1093,6 +1333,11 @@ def get_state() -> dict:
             for d in decisions
         ],
         "jev_verdicts": jev_verdicts["n"] if jev_verdicts else 0,
+        # The independent verifier's own record: what it allowed, what it
+        # denied, and why. Absent keys must render as "not reported" in the UI,
+        # never as zero, so a failure to read it cannot look like a clean sheet.
+        "verdicts": _recent_verdicts(),
+        "denied_count": _verdict_counts()[1],
         "generated_at": time.time(),
     }
 

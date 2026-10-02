@@ -1075,6 +1075,152 @@
 .pp-root .pp-why-missing { margin: 0; color: var(--muted); font-size: 9.5px; }
 
 /* ---------------------------------------------------------------------------
+ * The checks that run before an order is placed.
+ *
+ * The visual rule the whole panel follows: a denial must never be mistaken for
+ * an error, and an absent report must never be mistaken for a pass. So a denial
+ * is set apart by an edge and an underline in the same ink as everything else —
+ * this surface has no red, and a denial does not warrant one. An unreported
+ * figure is rendered in the muted tone with no weight at all, so a row of
+ * "not reported" reads as missing rather than as a result.
+ * ------------------------------------------------------------------------- */
+.pp-root .pp-check-honesty {
+  margin: 0 0 10px;
+  color: var(--muted-dark);
+  font-size: 10px;
+  line-height: 1.6;
+}
+.pp-root .pp-check-gap {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.55;
+}
+.pp-root .pp-check-counts {
+  margin-bottom: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+.pp-root .pp-check-counts dt { color: var(--muted-dark); font-size: 10px; }
+.pp-root .pp-check-counts dd { font-size: 11px; font-weight: 700; }
+
+.pp-root .pp-verdicts { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.pp-root .pp-verdict {
+  display: grid;
+  gap: 7px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: var(--paper);
+}
+.pp-root .pp-verdict-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 10px;
+}
+.pp-root .pp-verdict-head strong {
+  color: var(--ink);
+  font-size: 12px;
+  letter-spacing: -.01em;
+  overflow-wrap: anywhere;
+}
+.pp-root .pp-verdict-head time {
+  color: var(--muted-dark);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  white-space: nowrap;
+}
+
+/* The outcome word is the distinction, not the colour: it is set in caps and
+   tracked out for every row, and only a denied row carries the edge. */
+.pp-root .pp-verdict-outcome {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.pp-root .pp-verdict-outcome.is-allowed { color: var(--ink); }
+.pp-root .pp-verdict-outcome.is-denied { color: var(--ink); text-decoration: underline; }
+.pp-root .pp-verdict-outcome.is-unstated { color: var(--muted); }
+
+.pp-root .pp-verdict.is-allowed { border-left-color: var(--line-strong); }
+.pp-root .pp-verdict.is-denied { border-left-color: var(--ink); background: var(--soft); }
+.pp-root .pp-verdict.is-unstated { border-left-color: var(--line); }
+
+.pp-root .pp-verdict-why { display: grid; gap: 4px; }
+.pp-root .pp-verdict-why-label {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.pp-root .pp-verdict-why ul { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.pp-root .pp-verdict-reason {
+  margin: 0;
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: -.01em;
+  overflow-wrap: anywhere;
+}
+.pp-root .pp-verdict-note { margin: 0; color: var(--muted); font-size: 9.5px; line-height: 1.5; }
+
+/* Every check the engine named, and how each one came out. A check that was
+   never scored stays in the list in the muted tone: it ran, or it did not, and
+   the page does not know which. */
+.pp-root .pp-checks { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.pp-root .pp-check {
+  display: grid;
+  grid-template-columns: minmax(0, auto) auto;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 9.5px;
+}
+.pp-root .pp-check-name { color: var(--ink); font-family: var(--mono); overflow-wrap: anywhere; }
+.pp-root .pp-check-outcome {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.pp-root .pp-check.is-failed { border-color: var(--line-strong); }
+.pp-root .pp-check.is-failed .pp-check-outcome { color: var(--ink); text-decoration: underline; }
+.pp-root .pp-check.is-unstated { border-style: dashed; }
+.pp-root .pp-check.is-unstated .pp-check-name,
+.pp-root .pp-check.is-unstated .pp-check-outcome { color: var(--muted); font-weight: 400; }
+.pp-root .pp-check-detail {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.pp-root .pp-rejections { display: grid; gap: 6px; margin-top: 12px; }
+.pp-root .pp-exec-note { display: block; margin-top: 8px; color: var(--muted); font-size: 9px; }
+
+@media (max-width: 760px) {
+  .pp-root .pp-verdict-head { grid-template-columns: 1fr auto; }
+  .pp-root .pp-verdict-head time { grid-column: 1 / -1; }
+}
+
+/* ---------------------------------------------------------------------------
  * Two accounts.
  *
  * The virtual account is the page's own surface: cards read it with no

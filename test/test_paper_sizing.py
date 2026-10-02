@@ -31,7 +31,7 @@ import time
 
 import pytest
 
-from services.paper import db, engine, planner
+from services.paper import db, engine, execution, planner
 
 BTC = "BTCUSDT"
 SOL = "SOLUSDT"
@@ -64,6 +64,92 @@ SOL_CANDLES = series(140.0, 0.5)
 PRICES = {BTC: BTC_CANDLES, SOL: SOL_CANDLES}
 
 GOOD_METRICS = {"trades": 24, "net_pnl": 41.5, "max_drawdown": 12.25, "fees": 3.1}
+
+
+# ---------------------------------------------------------- the synthetic market
+#
+# This file prices its coins like the exchange quotes them -- BTC near 88,000 and
+# SOL near 140 -- which is the whole point of it, so the world these tests build is
+# already at the right level. What the bars above do not carry is the other half
+# of that world: the live quote the verifier re-fetches to check a plan's prices
+# against, and the clock it age-checks the history on. Both come from the same
+# ladders, so a plan's entry, the market it is checked against and the book it is
+# filled off cannot disagree.
+#
+# The book is two-sided with a real spread, because a buy that fills at the last
+# traded price is not a fill and a book with no spread has no depth to be thin
+# in. The shape is ``fetch_crypto_quote``'s, so the stub cannot pass either
+# module by carrying something the real feed never sends.
+
+#: A BTC or SOL major on Binance sits a couple of basis points wide; the paper
+#: account refuses anything past ``execution.DEFAULT_MAX_SPREAD_BPS``.
+BOOK_SPREAD_BPS = 3.0
+
+
+def book_from(ladder, *, spread_bps=BOOK_SPREAD_BPS, volume=None):
+    """A two-sided quote for exactly the world ``ladder`` describes.
+
+    The mid is the newest close, which is the number the planner turned into an
+    entry price, so the verifier's band is cleared because both came from one
+    thing. The volume is the day's worth of this ladder -- what a rolling 24h
+    figure is -- and is deep enough that an ordinary paper order fills whole.
+    """
+    mid = float(ladder[-1]["close"])
+    half = spread_bps / 20_000.0
+    return {
+        "ltp": mid,
+        "bid": round(mid * (1.0 - half), 8),
+        "ask": round(mid * (1.0 + half), 8),
+        "open": float(ladder[0]["open"]),
+        "high": round(max(float(bar["high"]) for bar in ladder), 8),
+        "low": round(min(float(bar["low"]) for bar in ladder), 8),
+        "prev_close": float(ladder[-2]["close"]),
+        "volume": float(volume) if volume is not None else float(sum(bar["volume"] for bar in ladder)),
+        "oi": 0.0,
+    }
+
+
+def stamped(ladders, *, age=0.0, interval=300.0):
+    """The ladders with a clock on every bar, newest ``age`` seconds behind now.
+
+    Written when the market is installed rather than when the ladder is built, so
+    a ladder constructed at import time is not an hour stale by the time a long
+    suite reaches the test that uses it. Milliseconds, as crypto feeds send them.
+    """
+    now = time.time()
+    out = {}
+    for symbol, ladder in ladders.items():
+        bars = []
+        for i, bar in enumerate(ladder):
+            copied = dict(bar)
+            copied["time"] = (now - age - (len(ladder) - 1 - i) * interval) * 1000.0
+            bars.append(copied)
+        out[symbol] = bars
+    return out
+
+
+def install_market(monkeypatch, ladders=None):
+    """Serve the quote and the history from one ladder per symbol.
+
+    ``engine._candles`` -- what the planner plans from -- is pointed at the same
+    bars, so all three readers see one market. ``ladders`` replaces the default
+    world for a case that needs a different one, such as the falling SOL ladder a
+    short is planned on.
+    """
+    world = stamped(ladders if ladders is not None else PRICES)
+
+    monkeypatch.setattr(engine, "_candles", lambda s, interval="5m": world.get(s, []))
+
+    def get_quote(symbol, exchange):
+        ladder = world.get(str(symbol).upper())
+        return None if ladder is None else book_from(ladder)
+
+    def get_history(symbol, exchange, interval="5m", start_date="", end_date=""):
+        return list(world.get(str(symbol).upper(), []))
+
+    monkeypatch.setattr("services.foreign_data_service.get_foreign_quote", get_quote)
+    monkeypatch.setattr("services.foreign_data_service.get_foreign_history", get_history)
+    return {symbol: book_from(ladder) for symbol, ladder in world.items()}
 
 
 def take_answer(state, questions):
@@ -108,10 +194,17 @@ def paper(tmp_path, monkeypatch):
             # default is the documented ceiling and the fallback the sizing code
             # uses, so it is the number every case below is stated against.
             "max_position_notional_usd": engine.DEFAULT_MAX_POSITION_NOTIONAL_USD,
-            # Deliberately left at the old default. Every existing installation has
-            # this value persisted, so the tests that matter run with it in place:
-            # if it were still a ceiling, no cheap coin could be sized at all.
-            "max_position_qty": 0.01,
+            # The verifier's per-position ceiling, in coins. Not the 0.01 every
+            # installation still carries -- that is the flat quantity the sizing
+            # rule below exists to stop reading, and it is the number that makes
+            # the same budget risk three orders of magnitude on BTC and on SOL.
+            # As a live ceiling it refuses every position this account can open,
+            # so the account states its own: one coin, far above the 0.36 SOL the
+            # notional cap allows at 140 and the 0.0005 BTC it allows at 88,000,
+            # and far below anything the exposure cap would let through.
+            # ``test_a_flat_quantity_left_in_the_config_no_longer_caps_the_size``
+            # puts the persisted 0.01 back to make its own point.
+            "max_position_qty": 1.0,
         }
         values.update(overrides)
         db.set_many(values)
@@ -173,9 +266,11 @@ def paper(tmp_path, monkeypatch):
             )
 
     configure()
+    # One world for both coins: the candles the planner reads, the quote the
+    # verifier checks a plan against, and the history it age-checks.
+    books = install_market(monkeypatch)
     # Marks come from the position row, never the network, so unrealized P&L is
     # exactly what the test put there.
-    monkeypatch.setattr(engine, "_candles", lambda s, interval="5m": PRICES.get(s, []))
     monkeypatch.setattr(engine, "_mark", lambda symbol, fallback=None: (fallback, False))
     # planner and engine share one ``jev`` module, so this is the analyst both of
     # them call.
@@ -189,6 +284,7 @@ def paper(tmp_path, monkeypatch):
             "register": staticmethod(register),
             "register_mirror": staticmethod(register_mirror),
             "open_position": staticmethod(open_position),
+            "books": books,
         },
     )
 
@@ -373,8 +469,11 @@ def test_a_flat_quantity_left_in_the_config_no_longer_caps_the_size(paper):
     ceiling = engine.DEFAULT_MAX_POSITION_NOTIONAL_USD
     entry = 140.0
     # The exposure cap is lifted above the ceiling, so the number asserted below is
-    # the per-position ceiling's with the account out of the way.
-    paper.configure(max_exposure_pct=1.0)
+    # the per-position ceiling's with the account out of the way. The persisted
+    # value of the old key is put back first, because that is the number this case
+    # is about: the fixture states a real one so the verifier's ceiling is a guard
+    # rather than a wall.
+    paper.configure(max_exposure_pct=1.0, max_position_qty=0.01)
     cfg = db.get_all()
     assert cfg["max_position_qty"] == 0.01
 
@@ -461,6 +560,36 @@ def test_the_notional_ceiling_is_a_ceiling_and_not_the_sizing_rule(paper):
     assert roomier["risk_usd"] == pytest.approx(raised * planner.STOP_PCT, rel=1e-6)
 
 
+def exposure_room() -> float:
+    """The room the planner will hand ``plan_size``, from the numbers it uses.
+
+    ``equity * max_exposure_pct`` less what the open positions already commit.
+    Equity now includes the capital tied up in the open longs, so seeding a
+    position raises the equity the cap is a share of -- which is exactly why a case
+    that seeds a position has to solve for the room rather than pick a quantity and
+    hope. Solving it is what ``_room_from_notional`` below is for.
+    """
+    with db.conn() as c:
+        committed = sum(
+            float(r["qty"]) * float(r["entry"])
+            for r in c.execute("SELECT qty,entry FROM positions WHERE status='open'")
+        )
+    cfg = db.get_all()
+    return engine.ledger_equity() * float(cfg["max_exposure_pct"]) - committed
+
+
+def _room_from_notional(wanted: float) -> float:
+    """The notional an open long must have for the room left to be ``wanted``.
+
+    A long worth ``n`` lifts equity by its own capital, and is itself ``n`` of
+    committed exposure, so ``room = (flat + n) * pct - n``. Inverted for ``n``.
+    """
+    cfg = db.get_all()
+    pct = float(cfg["max_exposure_pct"])
+    flat = engine.equity_of(cfg, 0.0)
+    return (flat * pct - wanted) / (1.0 - pct)
+
+
 def test_insufficient_cash_still_refuses_rather_than_shrinking(paper):
     """Cash, not a cap, and the answer is no -- never a smaller trade.
 
@@ -471,34 +600,40 @@ def test_insufficient_cash_still_refuses_rather_than_shrinking(paper):
     The account is derived from the ceiling and the budget it is testing, so the
     per-position ceiling is pushed past the exposure room and the budget is small
     enough at this stop distance that the rule alone would have taken the whole
-    room. The balance is then the only cap left to refuse.
+    room. The balance is then the only cap left to refuse. The seeded position's
+    own notional and unrealized gain are both sized so that the room the planner
+    computes comes out at ``room``, which is more than the balance can fund.
     """
     budget = engine.DEFAULT_RISK_BUDGET_USD
-    ceiling = engine.DEFAULT_MAX_POSITION_NOTIONAL_USD
     entry = 100.0
-    # The exposure room open P&L has inflated to, and the balance behind it: the
-    # room is more than the balance can fund, and the budget below is small enough
-    # at this stop distance that the rule alone would have taken the whole room.
-    room = ceiling * 10.0
+    pct = 0.9
+    committed = engine.DEFAULT_MAX_POSITION_NOTIONAL_USD
+    room = committed * 10.0
     cash = room * 0.9
-    # What the open position commits, and the unrealized gain that lifts equity to
-    # leave that much room: equity is cash + gain, and the room is equity - gain.
-    committed = ceiling
-    gain = room - cash + committed
     paper.register(symbol=SOL)
     paper.configure(
         cash=cash,
         starting_cash=cash,
-        max_exposure_pct=1.0,
+        max_exposure_pct=pct,
         max_position_notional_usd=room * 1.2,
     )
+    # What the open position commits, and the unrealized gain that lifts equity to
+    # leave that much room. Solved rather than assumed: equity is
+    # cash + the long's own committed notional + the gain, and the room is
+    # ``equity * pct - committed``.
+    gain = (room + committed) / pct - cash - committed
     paper.open_position(
         symbol=BTC,
         qty=committed / entry,
         entry=entry,
         mark=entry * (1 + gain / committed),
     )
-    assert engine.equity_of(db.get_all(), gain) == pytest.approx(cash + gain)
+    marking = engine.mark_account()
+    assert engine.equity_of(db.get_all(), marking.unrealized) == pytest.approx(
+        cash + committed + gain
+    )
+    assert exposure_room() == pytest.approx(room)
+    assert room > engine.available_cash(db.get_all())
 
     size = engine.plan_size(
         db.get_all(),
@@ -515,9 +650,11 @@ def test_insufficient_cash_still_refuses_rather_than_shrinking(paper):
     assert plan["refusal_reason"] == planner.INSUFFICIENT_CASH
     assert no_orders_or_fills()
 
-    # With the open P&L gone the same account can afford it again.
+    # With the open P&L gone the room shrinks back inside the balance and the same
+    # account can afford it again.
     with db.conn() as c:
         c.execute("UPDATE positions SET mark=entry WHERE symbol=?", (BTC,))
+    assert exposure_room() == pytest.approx((cash + committed) * pct - committed)
     affordable = plan_one(SOL)
     assert affordable["refusal_reason"] is None
     assert affordable["qty"] > 0
@@ -545,9 +682,11 @@ def test_a_squeezed_exposure_room_refuses_rather_than_trading_dust(paper):
     what refuses is the minimum and not the cap: the caps are not exhausted.
     """
     paper.register()
-    room = engine.equity_of(db.get_all(), 0.0) * float(db.get("max_exposure_pct"))
     dust = engine.MIN_POSITION_NOTIONAL_USD * 0.8
-    paper.open_position(symbol=SOL, qty=(room - dust) / 100.0, entry=100.0)
+    # The open position is sized from the room it has to leave behind, because
+    # equity now carries its own committed capital and the room is a share of that.
+    paper.open_position(symbol=SOL, qty=_room_from_notional(dust) / 100.0, entry=100.0)
+    assert exposure_room() == pytest.approx(dust)
 
     plan = plan_one(BTC)
 
@@ -689,12 +828,25 @@ def test_every_reported_number_comes_from_the_quantity_that_is_placed(paper):
     stop, target = plan["stop_loss"], plan["take_profit"]
 
     # The order carries the plan's quantity, and the reported money is that
-    # quantity times the distances of the order actually placed.
+    # quantity times the plan's own distances. The price is not on the plan: the
+    # fill is priced off the real book, a buy lifting the ask, so it differs from
+    # the entry by the spread and the slippage charged on it.
     assert qty == pytest.approx(plan["qty"])
-    assert entry == pytest.approx(plan["entry_price"])
-    assert plan["risk_usd"] == pytest.approx(abs(entry - stop) * qty, rel=1e-6)
-    assert plan["reward_usd"] == pytest.approx(abs(target - entry) * qty, rel=1e-6)
-    assert plan["rr"] == pytest.approx(abs(target - entry) / abs(entry - stop), rel=1e-6)
+    assert entry != pytest.approx(plan["entry_price"])
+    book = book_from(stamped({BTC: BTC_CANDLES})[BTC])
+    spread = book["ask"] - book["bid"]
+    # Slippage is a share of the spread the book is showing, and this account's
+    # share is its own ``slippage_bps`` -- the value the model falls back to when
+    # the config carries no ``execution_slippage_bps`` of its own.
+    share = engine._config_float(db.get_all(), "slippage_bps", execution.DEFAULT_SPREAD_SLIPPAGE_BPS)
+    assert entry == pytest.approx(round(book["ask"] + spread * share / 10_000.0, 8))
+    assert plan["risk_usd"] == pytest.approx(
+        abs(plan["entry_price"] - stop) * qty, rel=1e-6
+    )
+    assert plan["reward_usd"] == pytest.approx(abs(target - plan["entry_price"]) * qty, rel=1e-6)
+    assert plan["rr"] == pytest.approx(
+        abs(target - plan["entry_price"]) / abs(plan["entry_price"] - stop), rel=1e-6
+    )
     # The reasoning quotes the same money, not a recomputation of it.
     assert f"{plan['risk_usd']:.2f}" in plan["reasoning"]
     assert f"{plan['reward_usd']:.2f}" in plan["reasoning"]
@@ -720,10 +872,14 @@ def test_a_short_is_sized_by_the_same_rule_and_posts_its_notional_as_margin(pape
     # and not a side effect of the balance it is opened against.
     paper.configure(max_exposure_pct=1.0)
     balance = db.get_cash()
+    # The short is planned on a falling ladder, so the world is that ladder: the
+    # quote the verifier reads and the book the fill crosses have to be the market
+    # the plan was built from, falling rather than rising.
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(engine, "_candles", lambda s, interval="5m": series(140.0, -0.5))
+    books = install_market(monkeypatch, {SOL: series(140.0, -0.5)})
     try:
         plan = plan_one(SOL)
+        result = planner.execute(plan)
     finally:
         monkeypatch.undo()
 
@@ -736,8 +892,15 @@ def test_a_short_is_sized_by_the_same_rule_and_posts_its_notional_as_margin(pape
         abs(plan["entry_price"] - plan["stop_loss"]) * plan["qty"], rel=1e-6
     )
 
-    result = planner.execute(plan)
     assert result["executed"] is True
+    # A sell hits the bid, so the fill is the bid less the model's share of the
+    # observed spread -- the book the other side of the same order would have
+    # paid, which is why neither side gets the last traded price.
+    book = books[SOL]
+    share = engine._config_float(db.get_all(), "slippage_bps", execution.DEFAULT_SPREAD_SLIPPAGE_BPS)
+    assert result["price"] == pytest.approx(
+        round(book["bid"] - (book["ask"] - book["bid"]) * share / 10_000.0, 8)
+    )
     notional = result["price"] * result["qty"]
     # Sale proceeds credited, the whole notional posted as margin, fee paid.
     assert db.get_cash() == pytest.approx(balance + notional - result["fee"])
@@ -753,8 +916,17 @@ def test_a_short_is_sized_by_the_same_rule_and_posts_its_notional_as_margin(pape
 # ---------------------------------------------------------------- accounting
 
 
-def test_equity_after_a_fresh_entry_is_cash_plus_unrealized_less_locked_margin(paper):
-    """The identity, on a position opened by this planner, immediately after."""
+def test_equity_after_a_fresh_long_entry_has_only_lost_the_fee(paper):
+    """The identity, on a long opened by this planner, immediately after.
+
+        equity = cash + long_capital + unrealized - short_margin_locked
+
+    This case asserted the opposite before: that equity was the starting balance
+    less the position's notional. That was the defect, not a convention -- a long
+    spends cash and owns an asset, so its notional is still in the account, and a
+    50 USD position on a 100 USD account was reporting 50 USD of equity gone
+    before a coin had been lost. Only the fee is a cost of opening a position.
+    """
     paper.register()
     plan = plan_one(BTC)
     result = planner.execute(plan)
@@ -764,32 +936,33 @@ def test_equity_after_a_fresh_entry_is_cash_plus_unrealized_less_locked_margin(p
 
     assert state["cash"] == pytest.approx(db.get_cash())
     assert state["short_margin_locked"] == pytest.approx(0.0)
+    # The notional is held by the account, not spent on nothing, so it is reported
+    # as capital rather than left out. The fill is priced off the real book, so the
+    # notional is the recorded entry over the placed quantity and not the plan's own
+    # entry price.
+    notional = result["qty"] * result["price"]
+    assert state["long_capital"] == pytest.approx(notional, rel=1e-6)
     assert state["equity"] == pytest.approx(
-        state["cash"] + state["unrealized"] - state["short_margin_locked"]
+        state["cash"] + state["long_capital"] + state["unrealized"] - state["short_margin_locked"]
     )
     # A long just filled is held at its entry, so it carries no open P&L yet.
     assert state["unrealized"] == pytest.approx(0.0)
-    assert state["equity"] == pytest.approx(result["equity"])
+    assert state["equity"] == pytest.approx(result["equity"], rel=1e-6)
     # And the cash really did move: this is not the pre-trade figure.
-    assert state["equity"] < state["starting_cash"]
-    # The seeded balance less the position and the entry fee: the notional is now
-    # held, not spent on nothing, but this account measures equity as cash plus
-    # open P&L.
-    notional = plan["qty"] * plan["entry_price"]
-    assert result["equity"] == pytest.approx(
-        state["starting_cash"] - notional - result["fee"], rel=1e-6
+    assert state["cash"] == pytest.approx(state["starting_cash"] - notional - result["fee"])
+    assert state["equity"] < state["starting_cash"], "the entry fee is a real cost"
+    assert state["equity"] == pytest.approx(
+        state["starting_cash"] - result["fee"], rel=1e-6
     )
-    assert result["equity"] != pytest.approx(state["starting_cash"])
 
 
 def test_the_journal_reports_the_balance_as_it_is_after_the_fill(paper):
-    """The reported defect: one row claiming two different balances.
+    """The display defect: one row claiming two different balances.
 
-    Not an accounting bug -- the identity holds, and the ledger always agreed with
-    itself. A display one: the plan carried the balance it read *before* the fill,
-    so the journal wrote equity of 1000 next to the fill's own cash of 499.80 and
-    both were correct about a different moment. Both numbers are now read after the
-    fill, from the same transaction that moved the money.
+    The plan carried the balance it read *before* the fill, so the journal wrote
+    equity of 1000 next to the fill's own cash of 499.80 and both were correct
+    about a different moment. Both numbers are now read after the fill, from the
+    same transaction that moved the money.
     """
     paper.register()
     plan = plan_one(BTC)
@@ -810,31 +983,43 @@ def test_the_journal_reports_the_balance_as_it_is_after_the_fill(paper):
     assert logged["equity"] == pytest.approx(engine.equity_of(db.get_all(), 0.0))
 
 
-def test_an_entry_writes_an_equity_row_so_the_daily_loss_guard_can_see_it(paper):
+def test_an_entry_writes_an_equity_row_that_carries_the_whole_identity(paper):
     """The equity curve, peak and drawdown only move if a row is written.
 
     Only ``engine.trading_cycle`` used to write one and the worker no longer runs
-    that path, so a planner entry left the table untouched -- which also left the
-    daily-loss guard, that reads this table, blind to the position it had just
-    opened.
+    that path, so a planner entry left the table untouched -- which left the curve,
+    the peak and the drawdown stale for a position the account had just opened.
+
+    The row is the account's equity, not its balance: a long just filled is worth
+    the notional it paid away, so the row says the seeded balance less the entry
+    fee. It used to say the balance, which is the bug this whole file's accounting
+    section is about.
     """
     paper.register()
     assert rows("SELECT COUNT(*) AS n FROM equity")[0]["n"] == 0
 
     plan = plan_one(BTC)
-    planner.execute(plan)
-    notional = plan["qty"] * plan["entry_price"]
+    assert planner.execute(plan)["executed"] is True
+    # The position is marked down from the price it was actually filled at, and the
+    # fill is priced off the real book, so the notional is the recorded entry over
+    # the placed quantity rather than the plan's own entry price.
+    position = rows("SELECT entry,qty FROM positions WHERE status='open'")[0]
+    notional = float(position["entry"]) * float(position["qty"])
+    fee = rows("SELECT fee FROM fills ORDER BY id DESC LIMIT 1")[0]["fee"]
 
     curve = rows("SELECT cash,equity,unrealized FROM equity")
     assert len(curve) == 1
     assert curve[0]["cash"] == pytest.approx(db.get_cash())
-    assert curve[0]["equity"] == pytest.approx(db.get_cash())
-    assert float(db.get("last_equity")) == pytest.approx(db.get_cash())
-    assert float(db.get("peak_equity")) >= db.get_cash()
+    assert curve[0]["unrealized"] == pytest.approx(0.0)
+    # The balance fell by the notional and the fee; the equity fell by the fee.
+    assert curve[0]["equity"] == pytest.approx(db.get_cash() + notional, rel=1e-6)
+    assert curve[0]["equity"] == pytest.approx(float(db.get("starting_cash")) - fee, rel=1e-6)
+    assert float(db.get("last_equity")) == pytest.approx(curve[0]["equity"])
+    assert float(db.get("peak_equity")) >= curve[0]["equity"]
 
-    # Mark the position down by 1% and record again: two rows is what the guard
-    # needs to have a day to measure a loss against, and the loss is that 1% of the
-    # position, whatever the position is worth.
+    # Mark the position down by 1% and record again: the loss is that 1% of the
+    # position, whatever the position is worth, and the first record of the day has
+    # pinned the opening equity the guard measures it against.
     with db.conn() as c:
         c.execute("UPDATE positions SET mark=entry*0.99 WHERE symbol=?", (BTC,))
     engine._record_equity()
@@ -843,8 +1028,10 @@ def test_an_entry_writes_an_equity_row_so_the_daily_loss_guard_can_see_it(paper)
     equity = rows("SELECT equity FROM equity ORDER BY ts ASC")
     loss = float(equity[0]["equity"]) - float(equity[-1]["equity"])
     assert loss == pytest.approx(notional * 0.01, rel=1e-6)
-    # A limit at that loss blocks, which is the whole claim: the guard reads this
-    # table and nothing else, so a plan that writes no row cannot be stopped.
+    assert float(db.get("day_opening_equity")) == pytest.approx(float(equity[0]["equity"]))
+    # A limit at that loss blocks. The guard reads the live ledger against the day's
+    # pinned opening equity, not this table, but both agree here -- which is the
+    # point of the row.
     blocked, detail = planner._daily_loss(loss)
     assert blocked is True
     assert f"reached the {loss:.2f} USD limit" in detail

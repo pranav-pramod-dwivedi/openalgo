@@ -8,6 +8,58 @@ from pathlib import Path
 
 DATA = Path(os.getenv("PAPER_DB", "data/paper.db"))
 DATA.parent.mkdir(parents=True, exist_ok=True)
+
+# The independent verifier's audit trail. It answers one question that nothing
+# else records: what did the checker say about every plan it was shown, including
+# the ones it allowed. A table that only kept refusals would make a verifier that
+# quietly stopped looking indistinguishable from one that never objects.
+#
+# ``slugs``, ``reasons`` and ``checks`` are JSON documents rather than columns of
+# their own: the shape of a refusal is free to grow with the checks, and a fixed
+# column list would have to be migrated every time one is added.
+VERDICT_COLUMNS = (
+    ("ts", "REAL"),
+    ("allow", "INTEGER"),
+    ("severity", "TEXT"),
+    ("symbol", "TEXT"),
+    ("side", "TEXT"),
+    ("strategy_id", "TEXT"),
+    ("entry_price", "REAL"),
+    ("stop_loss", "REAL"),
+    ("take_profit", "REAL"),
+    ("qty", "REAL"),
+    ("risk_usd", "REAL"),
+    ("reward_usd", "REAL"),
+    ("rr", "REAL"),
+    ("live_price", "REAL"),
+    ("slugs", "TEXT"),
+    ("reasons", "TEXT"),
+    ("checks", "TEXT"),
+)
+VERDICTS_TABLE = "verdicts"
+VERDICTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS verdicts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL,
+    allow INTEGER,
+    severity TEXT,
+    symbol TEXT,
+    side TEXT,
+    strategy_id TEXT,
+    entry_price REAL,
+    stop_loss REAL,
+    take_profit REAL,
+    qty REAL,
+    risk_usd REAL,
+    reward_usd REAL,
+    rr REAL,
+    live_price REAL,
+    slugs TEXT,
+    reasons TEXT,
+    checks TEXT
+);
+"""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS config (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS hypotheses (id TEXT PRIMARY KEY, hypothesis TEXT, created REAL);
@@ -32,6 +84,10 @@ def conn():
 def init():
     with conn() as c:
         c.executescript(SCHEMA)
+        # The verifier's audit trail lives in its own script so the DDL has one
+        # home. Same connection, same transaction, so a fresh database gets it
+        # without the verifier having to have run first.
+        c.executescript(VERDICTS_SCHEMA)
         defaults = {
             "starting_cash": "100",
             "max_exposure_pct": "0.5",
@@ -82,6 +138,32 @@ def ensure_column(table: str, column: str, decl: str) -> bool:
             return False
         c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
         return True
+
+
+def ensure_verdicts() -> bool:
+    """Create the ``verdicts`` table when it is missing, and top it up when it is partial.
+
+    Idempotent in the same way ``init`` is, so the verifier can call it on every
+    plan without a separate migration step: ``CREATE TABLE IF NOT EXISTS`` and
+    ``PRAGMA table_info`` are both no-ops once the table is there and complete.
+    The column pass exists because SQLite can add a column but cannot drop one,
+    so an installation whose table predates a check keeps its old rows instead
+    of failing every INSERT with "no such column" until someone intervenes.
+
+    Returns True when something was actually created or added, which lets a
+    caller log a first-time setup rather than doing it on every cycle.
+    """
+    with conn() as c:
+        existed = bool({r["name"] for r in c.execute(f"PRAGMA table_info({VERDICTS_TABLE})")})
+        c.executescript(VERDICTS_SCHEMA)
+        cols = {r["name"] for r in c.execute(f"PRAGMA table_info({VERDICTS_TABLE})")}
+        added = False
+        for column, decl in VERDICT_COLUMNS:
+            if column in cols:
+                continue
+            c.execute(f"ALTER TABLE {VERDICTS_TABLE} ADD COLUMN {column} {decl}")
+            added = True
+    return added or not existed
 
 
 def get_all(existing=None) -> dict:

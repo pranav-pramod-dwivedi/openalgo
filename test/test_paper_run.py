@@ -1,6 +1,6 @@
 """The rules-only paper runner: trading with no analyst at all, loudly.
 
-Every test here runs against a temporary paper database with mocked candles,
+Every test here runs against a temporary paper database with a synthetic market,
 mocked research and a mocked analyst that would happily return a verdict, so no
 network call is ever made and the analyst's silence cannot be blamed on the
 fixture.
@@ -10,6 +10,13 @@ rate-limited analyst: the kill switch is respected, one cycle is one plan and at
 most one execution, ``jev.ask`` is never reached even when it would answer, and
 every execution leaves a ``rules_only_execution`` journal row carrying the full
 plan.
+
+The synthetic market matters here for the same reason as anywhere else in the
+paper suite. Placing a trade runs the independent verifier, which re-reads the
+live quote and the candle history and refuses prices that are not near them, and
+then the execution model, which fills the order against the real bid and ask. The
+ladder this file plans from closes at 129.50, so the market it is checked against
+has to be that ladder and not the live one. See ``install_market``.
 """
 
 import ast
@@ -51,7 +58,6 @@ def candles(closes, volumes=None):
                 "low": close * 0.998,
                 "close": close,
                 "volume": (volumes[i] if volumes else 1000.0 + i),
-                "time": time.time() - (len(closes) - i) * 60,
             }
         )
     return out
@@ -60,16 +66,92 @@ def candles(closes, volumes=None):
 RISING = candles([100.0 + i * 0.5 for i in range(60)])
 
 
+# ---------------------------------------------------------- the synthetic book
+#
+# The planner's entry is the newest close moved by the account's slippage. The
+# verifier re-fetches the quote and prices the plan against it; the execution
+# model then fills against the real bid and ask. Both reads come from this one
+# ladder, so the entry a plan was built from, the market it is checked against
+# and the book it is filled off are the same price level. The book is two-sided
+# with a real spread either side of the mid, so there is a book to cross and a
+# day of volume to measure the order against rather than one price wearing two
+# names. The shape is ``fetch_crypto_quote``'s, so the stub cannot pass either
+# module by carrying something the real feed never sends.
+
+#: A BTC major on Binance sits a couple of basis points wide; the paper account
+#: refuses a book wider than ``execution.DEFAULT_MAX_SPREAD_BPS``.
+BOOK_SPREAD_BPS = 3.0
+
+
+def book_from(ladder, *, spread_bps=BOOK_SPREAD_BPS, volume=None):
+    """A two-sided quote for exactly the world ``ladder`` describes.
+
+    The mid is the newest close, and the volume is the day's worth of this
+    ladder -- what a rolling 24h figure is -- so an ordinary paper order is a
+    rounding error of the market it crosses.
+    """
+    mid = float(ladder[-1]["close"])
+    half = spread_bps / 20_000.0
+    return {
+        "ltp": mid,
+        "bid": round(mid * (1.0 - half), 8),
+        "ask": round(mid * (1.0 + half), 8),
+        "open": float(ladder[0]["open"]),
+        "high": round(max(float(bar["high"]) for bar in ladder), 8),
+        "low": round(min(float(bar["low"]) for bar in ladder), 8),
+        "prev_close": float(ladder[-2]["close"]),
+        "volume": float(volume) if volume is not None else float(sum(bar["volume"] for bar in ladder)),
+        "oi": 0.0,
+    }
+
+
+def install_market(monkeypatch, ladder, symbol="BTCUSDT", *, age=0.0, interval=300.0):
+    """Serve ``engine._candles``, the quote and the history from one ladder.
+
+    Stamping the clock here rather than in the ladder keeps the bars from going
+    stale while a long suite works its way to them; the verifier age-checks the
+    history and would read a bar built at import time for what it is. The clock
+    is written in milliseconds, as crypto feeds send it.
+    """
+    now = time.time()
+    bars = []
+    for i, bar in enumerate(ladder):
+        copied = dict(bar)
+        copied["time"] = (now - age - (len(ladder) - 1 - i) * interval) * 1000.0
+        bars.append(copied)
+    quote = book_from(bars)
+
+    # The runner imports ``engine`` from ``services.paper``, so this one line is
+    # the fixture's ``engine._candles`` patch as well.
+    monkeypatch.setattr(engine, "_candles", lambda s, interval="5m": bars)
+
+    def get_quote(sym, exchange):
+        return dict(quote) if str(sym).upper() == symbol.upper() else None
+
+    def get_history(sym, exchange, iv="5m", start_date="", end_date=""):
+        return list(bars) if str(sym).upper() == symbol.upper() else []
+
+    monkeypatch.setattr("services.foreign_data_service.get_foreign_quote", get_quote)
+    monkeypatch.setattr("services.foreign_data_service.get_foreign_history", get_history)
+    return quote
+
+
 @pytest.fixture
 def paper(tmp_path, monkeypatch):
-    """An isolated paper database with cash, a validated strategy and candles."""
+    """An isolated paper database with cash, a validated strategy and a market."""
     monkeypatch.setattr(db, "DATA", tmp_path / "paper.db")
     db.init()
     db.set_many(
         {
             "starting_cash": 1000.0,
             "cash": 1000.0,
-            "max_position_qty": 0.01,
+            # The verifier's per-position ceiling, in coins. Every installation
+            # still carries this key at the pre-resize 0.01 -- the flat quantity
+            # the sizing rule was written to stop reading -- which at this world's
+            # price is 1.29 USD and would refuse every position a 1000 USD account
+            # can open. One coin is a real limit here and sits well above the
+            # largest position the notional cap allows.
+            "max_position_qty": 1.0,
             "max_exposure_pct": 0.5,
             "fee_bps": 4.0,
             "slippage_bps": 2.0,
@@ -79,8 +161,7 @@ def paper(tmp_path, monkeypatch):
     )
     config.set_halted(False)
     paper_run.set_armed(False)
-    monkeypatch.setattr(engine, "_candles", lambda s, interval="5m": RISING)
-    monkeypatch.setattr(paper_run.engine, "_candles", lambda s, interval="5m": RISING)
+    install_market(monkeypatch, RISING)
     monkeypatch.setattr(engine, "research_cycle", lambda *a, **k: None)
     monkeypatch.setattr(paper_run.engine, "research_cycle", lambda *a, **k: None)
     # The runner must leave the planner's analyst hook exactly as it found it,

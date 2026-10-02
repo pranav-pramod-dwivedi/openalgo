@@ -177,7 +177,17 @@ def test_covering_a_short_releases_margin(paper, monkeypatch):
     assert float(db.get("short_margin_locked")) == pytest.approx(0.0)
 
 
-def test_equity_equals_cash_plus_unrealized(paper, monkeypatch):
+def test_equity_includes_the_capital_an_open_long_has_tied_up(paper, monkeypatch):
+    """The identity, on a real long opened by the engine's own signal path.
+
+        equity = cash + long_capital + unrealized - short_margin_locked
+
+    ``long_capital`` is the term that was missing: a long pays its notional out of
+    the balance and owns the asset instead, and that asset is part of the account.
+    Leaving it out reported the position's own size as a permanent loss -- this
+    long is worth 50 USD, and equity used to be exactly 50 USD below where it
+    started before a single coin had been lost.
+    """
     monkeypatch.setattr(engine, "_candles", lambda symbol, interval="5m": RISING)
     paper.configure(cash=1000.0)
     paper.register()
@@ -185,17 +195,27 @@ def test_equity_equals_cash_plus_unrealized(paper, monkeypatch):
 
     with db.conn() as c:
         row = c.execute("SELECT entry,qty FROM positions WHERE status='open'").fetchone()
+    notional = float(row["entry"]) * float(row["qty"])
     marks, unrealized = _mark_real(row["entry"], row["qty"])
     monkeypatch.setattr(engine, "mark_open_positions", lambda: (marks, unrealized))
 
     engine._record_equity()
     state = engine.get_state()
 
-    assert state["equity"] == pytest.approx(state["cash"] + state["unrealized"])
+    # The capital is reported, and the identity holds on the reported numbers.
+    assert state["long_capital"] == pytest.approx(notional)
+    assert state["equity"] == pytest.approx(
+        state["cash"] + state["long_capital"] + state["unrealized"] - state["short_margin_locked"]
+    )
     assert state["cash"] == pytest.approx(db.get_cash())
     assert state["cash"] < state["starting_cash"]
     assert state["unrealized"] == pytest.approx(unrealized)
     assert state["short_margin_locked"] == pytest.approx(0.0)
+    # And the whole point: the balance fell by the notional and the entry fee, and
+    # the equity fell by the entry fee alone.
+    entry_fee = entry_fill(paper)["fee"]
+    assert state["equity"] == pytest.approx(state["starting_cash"] - entry_fee, rel=1e-6)
+    assert state["equity"] == pytest.approx(state["cash"] + notional, rel=1e-6)
 
 
 def test_equity_excludes_locked_short_margin(paper, monkeypatch):
@@ -209,7 +229,11 @@ def test_equity_excludes_locked_short_margin(paper, monkeypatch):
     state = engine.get_state()
     locked = float(db.get("short_margin_locked"))
 
-    assert state["equity"] == pytest.approx(state["cash"] + state["unrealized"] - locked)
+    # A short holds no asset, so there is no long capital to add back.
+    assert state["long_capital"] == pytest.approx(0.0)
+    assert state["equity"] == pytest.approx(
+        state["cash"] + state["long_capital"] + state["unrealized"] - locked
+    )
     # Without the margin deduction the sale proceeds would be counted twice.
     assert state["equity"] != pytest.approx(state["cash"] + state["unrealized"])
 

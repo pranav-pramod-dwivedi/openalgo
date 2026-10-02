@@ -53,7 +53,7 @@ import uuid
 
 from utils.logging import get_logger
 
-from . import config, db, engine, jev
+from . import config, db, engine, execution, jev, verifier
 from .strategies import FAMILIES
 
 logger = get_logger(__name__)
@@ -280,19 +280,34 @@ def _interval_seconds(interval: str) -> float:
 # --------------------------------------------------------------------- account
 
 
-def _daily_loss(limit: float) -> tuple[bool, str]:
-    """Whether today's paper equity loss has reached ``limit`` USD."""
+def _daily_loss(limit: float, equity: float | None = None) -> tuple[bool, str]:
+    """Whether today's paper equity loss has reached ``limit`` USD.
+
+    Measured from the live ledger against the equity pinned at the start of the
+    day (``engine.day_opening_equity``), not from the first row of the ``equity``
+    table today minus the last. That table is the chart, and it takes a row per
+    cycle, so a single row carrying a number that was wrong for one cycle made
+    first-minus-last read as a loss the account never made: a flat 100 USD account
+    holding a 42 USD long was halted for the day on a 42 USD phantom. The live
+    ledger and the day's pinned opening figure cannot be corrupted by one row, and
+    they also see a realised loss the moment a stop is filled -- without waiting for
+    the next cycle to write a row about it.
+
+    When the day's opening figure has not been established -- the first cycle of the
+    day has not recorded one yet, or this installation predates the pin -- the
+    answer is no. The guard has nothing to measure against, and halting an account
+    on a guess is the one failure this rule must not have.
+
+    ``equity`` is passed by a caller that has already marked the book this cycle;
+    otherwise the book is marked here.
+    """
     if limit <= 0:
         return False, ""
-    day_start = time.time() - (time.time() % 86400)
-    with db.conn() as c:
-        rows = c.execute(
-            "SELECT equity FROM equity WHERE ts >= ? ORDER BY ts ASC", (day_start,)
-        ).fetchall()
-    if len(rows) < 2:
+    opening = engine.day_opening_equity()
+    if opening is None:
         return False, ""
-    first, last = float(rows[0]["equity"]), float(rows[-1]["equity"])
-    loss = first - last
+    current = engine.ledger_equity() if equity is None else float(equity)
+    loss = opening - current
     if loss >= limit:
         return True, f"today's paper loss {loss:.2f} USD reached the {limit:.2f} USD limit"
     return False, f"today's paper loss {loss:.2f} USD against a {limit:.2f} USD limit"
@@ -496,8 +511,9 @@ def plan(
 
     cfg = db.get_all()
     cash = engine.available_cash(cfg)
-    unrealized = _unrealized()
-    equity = engine.equity_of(cfg, unrealized)
+    marking = _live_marking()
+    unrealized = marking.unrealized
+    equity = engine.equity_of(cfg, unrealized, marking.long_capital)
     open_symbols = _open_symbols()
     exposure_pct = _as_float(cfg.get("max_exposure_pct"), 0.5)
     exposure_open = _exposure_notional()
@@ -505,7 +521,7 @@ def plan(
     fee_rate = engine._fee_rate(cfg)
     slip_rate = engine._slip_rate(cfg)
 
-    blocked, blocked_detail = _daily_loss(daily_limit)
+    blocked, blocked_detail = _daily_loss(daily_limit, equity)
     best: dict | None = None
 
     for symbol in symbols:
@@ -882,14 +898,19 @@ def _state_string(symbol, side, setup, facts, entry, stop, target) -> str:
     )
 
 
-def _unrealized() -> float:
-    """Open P&L, reusing the engine's own marking so the numbers agree."""
+def _live_marking() -> engine.Marking:
+    """The engine's own marking pass, in the shape the equity identity is on.
+
+    One pass per plan, reused for the exposure room, the reported open P&L and the
+    daily-loss guard, so the three cannot disagree about what the book is worth. A
+    failure is not fatal: an empty book is the conservative reading, and it is said
+    out loud in the log rather than papered over with an invented mark.
+    """
     try:
-        _, unrealized = engine.mark_open_positions()
+        return engine.mark_account()
     except Exception:
-        logger.warning("could not mark open positions; treating unrealized as zero")
-        return 0.0
-    return _as_float(unrealized)
+        logger.warning("could not mark open positions; reading them as a flat book")
+        return engine.Marking([], 0.0, 0.0)
 
 
 def _brackets_supported() -> bool:
@@ -954,6 +975,15 @@ def execute(plan: dict) -> dict:
             "executed": False,
         }
 
+    # Independent check, deliberately after the planner's own refusals and
+    # before anything is written: the verifier does not trust this module.
+    verdict = verifier.verify(plan)
+    if not verdict["allow"]:
+        return _refuse(
+            verdict["reason_slugs"][0],
+            verdict["reasons"][0]["message"],
+        )
+
     db.init()
     db.ensure_column("positions", "mark", "REAL")
     symbol = plan["symbol"]
@@ -972,8 +1002,16 @@ def execute(plan: dict) -> dict:
             if already:
                 return _refuse(SYMBOL_ALREADY_OPEN, f"{symbol} already holds an open position")
             cfg = db.get_all(c)
+            # Price the fill against the real book, not the plan's entry. A buy
+            # lifts the ask, a sell hits the bid, and an order too large for the
+            # observed volume fills partially with the remainder left open.
+            fill = execution.quote_execution(symbol, side, qty, cfg=cfg)
+            if fill["status"] == execution.STATUS_REJECTED:
+                return _refuse(fill["reason"], fill["detail"])
+            entry = fill["price"]
+            qty = fill["filled_qty"]
+            fee = fill["fee"]
             cash = engine.available_cash(cfg)
-            fee = entry * qty * engine._fee_rate(cfg)
             cost = entry * qty + fee if side == "BUY" else fee
             if cost > cash:
                 return _refuse(
@@ -999,7 +1037,7 @@ def execute(plan: dict) -> dict:
             )
             c.execute(
                 "INSERT INTO fills(order_id,symbol,side,qty,price,fee,slippage,ts) VALUES(?,?,?,?,?,?,?,?)",
-                (order_id, symbol, side, qty, entry, fee, entry * engine._slip_rate(cfg), now),
+                (order_id, symbol, side, qty, entry, fee, fill["slippage"], now),
             )
             c.execute(
                 "INSERT OR REPLACE INTO positions"
@@ -1011,13 +1049,22 @@ def execute(plan: dict) -> dict:
         return _refuse("execution_error", f"{type(exc).__name__}: {exc}")
 
     # Equity after the fill, on the account's own convention:
-    #     equity = cash + unrealized - short_margin_locked
-    # The new position is written at its entry mark, so it contributes exactly
-    # zero unrealized and the open P&L the plan measured carries over untouched.
+    #     equity = cash + long_capital + unrealized - short_margin_locked
+    # A buy has just tied its notional up in a long, so that capital is added back
+    # here: without it the fill would report a loss of the position's own size and
+    # the account would look smaller for having taken a trade rather than for having
+    # lost one. A short needs no such term -- it holds no asset, and the notional it
+    # posted as margin is the ``short_margin_locked`` the identity already removes.
+    # The new position is written at its entry mark, so it contributes exactly zero
+    # unrealized and the open P&L the plan measured carries over untouched.
     # Reporting the plan's pre-trade equity next to the post-trade cash is what
     # made a filled position read as "equity 1000, cash 499.80".
     open_pnl = _as_float(plan.get("unrealized"), 0.0)
-    equity_after = new_cash + open_pnl - locked
+    equity_after = engine.equity_of(
+        {**cfg, "cash": new_cash, "short_margin_locked": locked},
+        open_pnl,
+        entry * qty if side == "BUY" else 0.0,
+    )
     _record_equity_after_entry()
 
     result = {

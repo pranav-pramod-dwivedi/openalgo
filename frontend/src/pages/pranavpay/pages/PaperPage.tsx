@@ -2,8 +2,10 @@ import { useMemo } from 'react'
 import { ACCOUNT_LABEL, NOT_REPORTED, SANDBOX_LABEL } from '../account'
 import { EmptyNote, LoadingNote, useSnapshot } from '../components'
 import { formatTime, money, percent, qty, relativeTime, signedMoney } from '../derive'
+import { ExecutionPanel } from '../ExecutionPanel'
 import type { PaperPlan, PaperStrategy } from '../usePaperState'
-import { latestPlan, metricOf, parseMetrics } from '../usePaperState'
+import { latestPlan, metricOf, paperVerification, parseMetrics } from '../usePaperState'
+import { VerificationPanel } from '../VerificationPanel'
 
 /** Epoch seconds from the engine, as a Date the formatters accept. */
 const at = (ts: number | null | undefined): Date | null =>
@@ -107,6 +109,16 @@ export default function PaperPage() {
 
   const plan = useMemo(() => latestPlan(state?.decisions), [state?.decisions])
 
+  /**
+   * The verification layer, read once and handed to both panels.
+   *
+   * Parsed off the state rather than kept as its own request, because it is one
+   * ledger read: the verdicts and the counts arrive on the payload the page
+   * already fetched, and a missing key there is a fact about this engine rather
+   * than a failure to load.
+   */
+  const verification = useMemo(() => paperVerification(state), [state])
+
   /** The strategy a plan named, so its backtest record can sit under the plan. */
   const planStrategy = useMemo(() => {
     if (!plan?.strategy_id) return null
@@ -179,7 +191,9 @@ export default function PaperPage() {
           </h1>
           <p className="intro-copy">
             The paper worker places simulated orders against live prices. This is the ledger every
-            other PranavPay page reads as your account, shown with the engine's own detail.
+            other PranavPay page reads as your account, shown with the engine's own detail. Every
+            order is checked before it is placed, and every fill reports how it was priced — where
+            the engine said nothing, this page says that too rather than filling the gap.
           </p>
         </div>
       </section>
@@ -229,6 +243,8 @@ export default function PaperPage() {
           </small>
         </article>
       </section>
+
+      <VerificationPanel verification={verification} />
 
       <section className="surface-card pp-paper-section">
         <LatestPlan plan={plan} strategy={planStrategy} />
@@ -451,44 +467,7 @@ export default function PaperPage() {
         )}
       </section>
 
-      {state.fills.length > 0 && (
-        <section className="surface-card pp-paper-section">
-          <div className="section-heading compact-heading">
-            <div>
-              <span className="card-label">Fills</span>
-              <h2>Last {state.fills.length} simulated fills</h2>
-            </div>
-          </div>
-          <div className="pp-paper-table-wrap">
-            <table className="pp-paper-table">
-              <thead>
-                <tr>
-                  <th scope="col">Time</th>
-                  <th scope="col">Symbol</th>
-                  <th scope="col">Side</th>
-                  <th scope="col">Qty</th>
-                  <th scope="col">Price</th>
-                  <th scope="col">Fee</th>
-                </tr>
-              </thead>
-              <tbody>
-                {state.fills.map((fill) => (
-                  <tr key={fill.order_id}>
-                    <td>{formatTime(at(fill.ts))}</td>
-                    <td>
-                      <strong>{fill.symbol}</strong>
-                    </td>
-                    <td>{fill.side}</td>
-                    <td>{qty(fill.qty)}</td>
-                    <td>{money(fill.price)}</td>
-                    <td>{money(fill.fee)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
+      <ExecutionPanel fills={state.fills} verification={verification} />
 
       <div className="pp-note pp-note-quiet">
         {updatedAt ? `Read from the engine ${relativeTime(updatedAt)}.` : 'Not yet read.'}
