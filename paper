@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# One entry point for the paper-trading system.
+#
+#   ./paper setup     install, initialise, seed the strategy lab, verify the analyst key
+#   ./paper start     run the autonomous worker in the background
+#   ./paper trade     plan one trade and place it (paper money only)
+#   ./paper status    worker health, equity, positions, strategies
+#   ./paper stop      halt the worker (kill switch) and stop the process
+#   ./paper logs      tail the worker log
+#
+# PAPER TRADING - VIRTUAL MONEY. Nothing here can reach a broker.
+
+set -euo pipefail
+
+cd "$(dirname "$0")"
+export PAPER_DB="${PAPER_DB:-data/paper.db}"
+PIDFILE="log/paper_worker.pid"
+WORKER_LOG="log/paper_worker.log"
+export OPENCODE_API_KEY="${OPENCODE_API_KEY:-}"
+
+say() { printf '\n  %s\n\n' "$*"; }
+die() { printf '\n  %s\n\n' "$1" >&2; exit 1; }
+
+need_uv() {
+  command -v uv >/dev/null 2>&1 || die "uv is not installed. See https://docs.astral.sh/uv/."
+}
+
+worker_pid() {
+  [ -f "$PIDFILE" ] || return 1
+  local pid
+  pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && printf '%s' "$pid"
+}
+
+cmd_setup() {
+  need_uv
+  say "Installing dependencies"
+  uv sync --quiet
+  [ -f .env ] || { cp .sample.env .env; say "Created .env from .sample.env"; }
+  say "Building the dashboard"
+  (cd frontend && npm install --silent && npm run build --silent) || say "Frontend build skipped; the API and CLI work regardless"
+  say "Initialising the paper database"
+  uv run python -c "from services.paper import db; db.init(); print('  database ready at', db.DATA)"
+  say "Checking the analyst key"
+  if uv run python -c "from services.paper import jev; raise SystemExit(0 if jev._key() else 1)"; then
+    say "Analyst key found. Run './paper trade' to see whether the model is answering right now."
+  else
+    say "No analyst key yet. Add OPENCODE_API_KEY to .env to let the analyst review trades."
+  fi
+  say "Seeding the strategy lab (this backtests the grid on live candles)"
+  uv run python scripts/paper_worker.py --once --quiet || say "Research pass failed; check log/paper_worker.log"
+  uv run python scripts/paper_status.py 2>/dev/null || true
+  say "Done. Next: ./paper start   then   ./paper trade"
+}
+
+cmd_start() {
+  need_uv
+  mkdir -p log
+  if pid="$(worker_pid)"; then
+    say "Worker already running as PID $pid. Use './paper status'."
+    return 0
+  fi
+  nohup uv run python scripts/paper_worker.py >"$WORKER_LOG" 2>&1 &
+  printf '%s' "$!" >"$PIDFILE"
+  sleep 3
+  if pid="$(worker_pid)"; then
+    say "Worker running as PID $pid. Log: $WORKER_LOG"
+    uv run python scripts/paper_status.py || true
+  else
+    say "The worker did not start. See $WORKER_LOG"
+    tail -20 "$WORKER_LOG" >&2 || true
+    exit 1
+  fi
+}
+
+cmd_trade() {
+  need_uv
+  local symbol=""
+  if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then symbol="$1"; shift; fi
+  local extra=()
+  [ -n "$symbol" ] && extra+=(--symbol "$symbol")
+  say "Asking the planner for one trade on ${symbol:-the watchlist} (paper money)"
+  set +e
+  uv run python scripts/profitable_trade.py "${extra[@]}" "$@" --yes
+  local rc=$?
+  set -e
+  say "Dashboard: /paper   Worker log: $WORKER_LOG"
+  return $rc
+}
+
+cmd_status() {
+  need_uv
+  uv run python scripts/paper_status.py
+}
+
+cmd_stop() {
+  need_uv
+  uv run python scripts/paper_worker.py --halt || true
+  if pid="$(worker_pid)"; then
+    kill "$pid" 2>/dev/null || true
+    rm -f "$PIDFILE"
+    say "Worker stopped and the kill switch is set. './paper start' resumes trading."
+  else
+    say "No running worker found. The kill switch is set."
+  fi
+}
+
+cmd_logs() { tail -f "$WORKER_LOG"; }
+
+case "${1:-}" in
+  setup) shift; cmd_setup "$@" ;;
+  start) shift; cmd_start "$@" ;;
+  trade) shift; cmd_trade "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  stop) shift; cmd_stop "$@" ;;
+  logs) shift; cmd_logs "$@" ;;
+  *)
+    cat <<'USAGE'
+  paper - autonomous paper trading, one command at a time
+
+    ./paper setup      install, build, initialise, seed strategies, check the analyst key
+    ./paper start      run the worker in the background
+    ./paper trade      plan and place one paper trade (optional: ./paper trade BTCUSDT)
+    ./paper status     worker health, equity, positions, strategies
+    ./paper stop       halt the worker and set the kill switch
+    ./paper logs       follow the worker log
+
+  Paper trading - virtual money. No broker is ever contacted.
+USAGE
+    ;;
+esac
