@@ -324,22 +324,96 @@ def test_a_budget_too_small_to_trade_is_refused_rather_than_shrunk_to_dust(paper
 
 
 def test_a_budget_raises_the_position_until_the_notional_ceiling_stops_it(paper, monkeypatch):
-    """A bigger budget buys more risk, up to the caps, and never past them."""
-    paper.configure()
+    """A bigger budget buys more risk, up to the caps, and never past them.
+
+    The rule is ``qty = risk_budget / |entry - stop|``, and every ceiling after
+    that only makes the position smaller. The stop is ``planner.STOP_PCT`` from
+    the entry, so a notional is worth ``notional * STOP_PCT`` of risk, and that is
+    what fixes the window in which a budget still moves the size: the
+    per-position ceiling is reached at ``ceiling * STOP_PCT`` of risk, and below
+    ``MIN_POSITION_NOTIONAL_USD * STOP_PCT`` there is no trade to size at all.
+
+    On the default account that window exists and is wide enough to demonstrate,
+    but it sits far below ``engine.DEFAULT_RISK_BUDGET_USD``, so at any budget a
+    caller would really pass the ceiling has already bound and a bigger budget is
+    not a bigger position. That is the part worth pinning, and both sides of the
+    crossover are pinned below, with every figure read out of the engine's own
+    constants and the account rather than written down here.
+    """
+    # The account the engine itself seeds, with the exposure cap opened above the
+    # per-position ceiling so the notional ceiling is unambiguously the cap that
+    # binds. Exposure has its own cases and its own figures.
+    paper.configure(cash=engine.DEFAULT_CASH, max_exposure_pct=1.0)
     paper.register()
     paper.use(RISING)
     monkeypatch.setattr(planner.jev, "ask", take_answer)
 
-    small = planner.plan(symbols=["BTCUSDT"], max_risk=0.5)
-    large = planner.plan(symbols=["BTCUSDT"], max_risk=1.0)
+    ceiling_notional = engine.DEFAULT_MAX_POSITION_NOTIONAL_USD
+    min_notional = engine.MIN_POSITION_NOTIONAL_USD
+
+    # The plans, not this test's algebra, define the window: how much of an entry
+    # the planner's own stop puts at risk is what turns a notional into a budget.
+    probe = planner.plan(symbols=["BTCUSDT"], max_risk=engine.DEFAULT_RISK_BUDGET_USD)
+    assert probe["refusal_reason"] is None
+    risk_per_notional = (probe["entry_price"] - probe["stop_loss"]) / probe["entry_price"]
+    assert risk_per_notional == pytest.approx(planner.STOP_PCT), (
+        "the stop distance is what converts a notional into a risk budget"
+    )
+
+    # The two budgets that bound the window, both derived rather than written.
+    smallest_budget = min_notional * risk_per_notional
+    crossover_budget = ceiling_notional * risk_per_notional
+    assert crossover_budget > smallest_budget, (
+        "the account must leave a budget range in which a bigger budget does buy a "
+        "bigger position, or this rule has nothing left to prove"
+    )
+    window = crossover_budget - smallest_budget
+
+    # Below the crossover, and clear of both edges, a bigger budget buys more of
+    # the position: nothing capped either one, so the budget is the whole risk.
+    small = planner.plan(symbols=["BTCUSDT"], max_risk=smallest_budget + window / 3)
+    large = planner.plan(symbols=["BTCUSDT"], max_risk=smallest_budget + 2 * window / 3)
 
     assert small["refusal_reason"] is None and large["refusal_reason"] is None
     assert small["qty"] < large["qty"]
-    assert small["risk_usd"] == pytest.approx(0.5)
-    # One budget's risk is the whole budget. The larger one asks for exactly the
-    # notional ceiling's worth of position, so the ceiling is what binds it.
-    assert large["qty"] * large["entry_price"] == pytest.approx(500.0, rel=1e-6)
-    assert large["risk_usd"] == pytest.approx(1.0)
+    assert small["risk_usd"] == pytest.approx(smallest_budget + window / 3)
+    assert large["risk_usd"] == pytest.approx(smallest_budget + 2 * window / 3)
+    assert large["qty"] * large["entry_price"] < ceiling_notional
+
+    # At and past the crossover the ceiling binds, so the position is worth what
+    # the ceiling says it is worth no matter what was asked for.
+    at_ceiling = planner.plan(symbols=["BTCUSDT"], max_risk=crossover_budget)
+    past_ceiling = planner.plan(symbols=["BTCUSDT"], max_risk=crossover_budget * 10)
+    default_budget = planner.plan(symbols=["BTCUSDT"])
+
+    assert at_ceiling["refusal_reason"] is None and past_ceiling["refusal_reason"] is None
+    assert past_ceiling["qty"] == at_ceiling["qty"], (
+        "past the crossover the notional ceiling binds, so a bigger budget must not "
+        "buy a bigger position"
+    )
+    for capped in (at_ceiling, past_ceiling):
+        assert capped["qty"] * capped["entry_price"] == pytest.approx(ceiling_notional, rel=1e-6)
+        assert capped["risk_usd"] == pytest.approx(crossover_budget)
+    # Which is why the account's own default budget already buys the ceiling's
+    # position: at this scale a bigger budget is not a bigger trade.
+    assert default_budget["refusal_reason"] is None
+    assert default_budget["risk_usd"] == pytest.approx(crossover_budget)
+
+    # The ceiling can only carry so much risk. Past the budget whose minimum risk
+    # floor the ceiling cannot meet, the honest answer is a refusal naming both
+    # numbers -- not a position shrunk to carry less than the floor demands.
+    overreach = at_ceiling["risk_usd"] / engine.MIN_RISK_FRACTION * 2
+    unfundable = planner.plan(symbols=["BTCUSDT"], max_risk=overreach)
+
+    assert unfundable["refusal_reason"] == planner.BELOW_MIN_SIZE
+    detail = unfundable["refusal_detail"]
+    assert (
+        f"{at_ceiling['risk_usd']:.4f} USD at risk against a {overreach:.2f} USD budget" in detail
+    ), f"the refusal must name the risk the ceiling can carry: {detail}"
+    assert (
+        f"under the {engine.MIN_RISK_FRACTION:.0%} "
+        f"({overreach * engine.MIN_RISK_FRACTION:.4f} USD) minimum" in detail
+    ), f"and the floor it could not meet: {detail}"
 
 
 def test_execute_refuses_a_refused_plan_and_writes_nothing(paper, monkeypatch):

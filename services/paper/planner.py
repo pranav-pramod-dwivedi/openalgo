@@ -85,7 +85,7 @@ TIME_KEYS = ("time", "timestamp", "ts", "open_time", "date")
 REGIME_WINDOW = 20
 VOL_WINDOW = 20
 
-DEFAULT_MAX_RISK = 5.0
+DEFAULT_MAX_RISK = 2.0
 
 # Refusal reasons. Named constants so the worker, the CLI and the tests all
 # read the same string.

@@ -39,7 +39,7 @@ MIRROR_HYPOTHESIS = "research-symbol-mirror"
 # actually carries a price rather than assuming one shape.
 MARK_KEYS = ("last", "ltp", "price", "lastPrice", "mark_price", "close")
 
-DEFAULT_CASH = 1000.0
+DEFAULT_CASH = 100.0
 
 # Cash and equity conventions
 # --------------------------
@@ -107,7 +107,7 @@ def available_cash(cfg: dict) -> float:
 #
 #   * ``max_position_notional_usd`` -- the most one position may be worth. In
 #     currency, because a quantity is not comparable across coins. The default is
-#     500: half of the default 1000 USD paper account, which is the same
+#     50: half of the default 100 USD paper account, which is the same
 #     half-the-account ceiling ``max_exposure_pct`` already expresses for the book
 #     as a whole. Set it to 0 to leave the exposure cap as the only notional
 #     ceiling.
@@ -140,22 +140,22 @@ def available_cash(cfg: dict) -> float:
 # name the numbers; they are never filled as dust.
 
 #: The most one position may be worth, in USD, when the config says nothing.
-DEFAULT_MAX_POSITION_NOTIONAL_USD = 500.0
+DEFAULT_MAX_POSITION_NOTIONAL_USD = 50.0
 
 #: The risk budget a caller gets when it names none. Same literal as
 #: ``worker.DEFAULT_MAX_RISK_USD``; repeated here because the worker imports this
 #: module and the engine must not import the worker.
-DEFAULT_RISK_BUDGET_USD = 5.0
+DEFAULT_RISK_BUDGET_USD = 2.0
 
 #: After every ceiling, the position must still risk at least this share of the
-#: budget. One percent of a 5 USD budget is 0.05 USD, which is far enough above a
-#: reported 0.00 to be worth trading and far enough below 5.00 to be a real stop.
+#: budget. One percent of a 2 USD budget is 0.02 USD, which is far enough above a
+#: reported 0.00 to be worth trading and far enough below 2.00 to be a real stop.
 MIN_RISK_FRACTION = 0.01
 
 #: After every ceiling, the position must still be worth at least this much.
-#: 10 USD is 1% of the default 1000 USD account: below it the fill, the P&L and
+#: 5 USD is 5% of the default 100 USD account: below it the fill, the P&L and
 #: the fee all round away, so the record of the trade says nothing useful.
-MIN_POSITION_NOTIONAL_USD = 10.0
+MIN_POSITION_NOTIONAL_USD = 5.0
 
 #: Quantities are floored to this many decimals, so float rounding can only shrink
 #: a position and never push the realised risk back over the budget.

@@ -118,7 +118,7 @@ MAX_ERROR_LENGTH = 500
 # key (not part of ``PaperConfig``) so it survives a restart without touching the
 # engine's own risk settings.
 KEY_MAX_RISK = "max_risk_usd"
-DEFAULT_MAX_RISK_USD = 5.0
+DEFAULT_MAX_RISK_USD = 2.0
 MIN_MAX_RISK_USD = 0.01
 MAX_MAX_RISK_USD = 1_000_000.0
 

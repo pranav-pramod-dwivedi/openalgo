@@ -153,6 +153,23 @@ def register(symbol="BTCUSDT", family="momentum"):
         )
 
 
+def open_position(symbol, qty=0.01, entry=100.0, side="BUY"):
+    """Write an open position row directly, with no order behind it.
+
+    Used to put the account in a state a test names, instead of waiting for a
+    balance to drift into it: whether a cycle can trade is decided by rules, and
+    a rule can be set up exactly. An incidental balance is not a fixture.
+    """
+    db.ensure_column("positions", "mark", "REAL")
+    row = (symbol, side, qty, entry, time.time(), "manual")
+    with db.conn() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO positions"
+            "(symbol,side,qty,entry,opened,strategy_id,sl,tp,status,mark) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            row + (entry * 0.99, entry * 1.01, "open", entry),
+        )
+
+
 def orders():
     with db.conn() as c:
         return [dict(r) for r in c.execute("SELECT id, symbol, side, qty FROM orders ORDER BY created")]
@@ -314,18 +331,43 @@ def test_paper_run_places_at_most_one_trade_per_cycle(paper, monkeypatch):
     calls = count_calls(monkeypatch)
 
     runner = armed_runner()
-    results = [runner.run_cycle() for _ in range(3)]
 
-    # Three cycles, three plan attempts, one trade in each of the first two. The
-    # loop keeps trading across cycles; it never puts two in one cycle.
-    assert [r["trades_placed"] for r in results] == [1, 1, 0]
-    assert all(r["trades_placed"] <= 1 for r in results)
-    assert results[0]["planner_verdict"] == "executed"
-    assert len([c for c in calls if c[0] == "plan"]) == 3, "one plan per cycle, never a retry"
-    assert len([c for c in calls if c[0] == "execute"]) <= 3, "at most one execute per cycle"
+    # Two cycles, two plan attempts, one trade in each: the loop keeps trading
+    # across cycles and neither of them stacked a second order.
+    first = runner.run_cycle()
+    second = runner.run_cycle()
+
+    assert [first["trades_placed"], second["trades_placed"]] == [1, 1]
+    assert first["planner_verdict"] == "executed"
+    assert len([c for c in calls if c[0] == "plan"]) == 2, "one plan per cycle, never a retry"
+    assert len([c for c in calls if c[0] == "execute"]) == 2, "one execute per trading cycle"
     assert len(orders()) == 2, f"one trade per cycle, not one per symbol: {orders()}"
-    # Two cycles, two different coins: neither cycle stacked a second trade.
+    # Two cycles, two different coins: neither cycle walked on to a second symbol.
     assert orders()[0]["symbol"] != orders()[1]["symbol"]
+
+    # The third cycle is blocked by a rule this test sets up, not by whatever
+    # balance the first two happened to leave behind: the one symbol the planner
+    # has not traded is opened here, so the cycle is refused by the already-open
+    # rule and has nothing to place.
+    for symbol in set(WATCHLIST) - {o["symbol"] for o in orders()}:
+        open_position(symbol)
+    third = runner.run_cycle()
+    results = [first, second, third]
+
+    assert [r["trades_placed"] for r in results] == [1, 1, 0]
+    assert all(r["trades_placed"] <= 1 for r in results), "never more than one in a cycle"
+    assert third["planner_verdict"] == "refused"
+    assert third["refusal_reason"] == planner.SYMBOL_ALREADY_OPEN
+    assert third["refusal_reason"] != paper_run.TOO_MANY_TRADES, (
+        "the cycle was refused by the planner, not by the one-trade guard"
+    )
+    assert len(orders()) == 2, "a refused cycle places nothing"
+    # Three cycles, three plan attempts, two of them executed: a refused cycle
+    # still asks exactly once and never retries into a second symbol.
+    assert len([c for c in calls if c[0] == "plan"]) == 3, "one plan per cycle, never a retry"
+    assert len([c for c in calls if c[0] == "execute"]) == 2, (
+        "the refused cycle reached execute() zero times"
+    )
 
 
 def test_paper_run_may_trade_again_in_the_next_cycle(paper, monkeypatch):

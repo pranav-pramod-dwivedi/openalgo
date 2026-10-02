@@ -285,10 +285,16 @@ That number is then **capped**, and a cap can only ever make it smaller:
 
 | Cap | Key | Default | What it bounds |
 | --- | --- | --- | --- |
-| Notional ceiling | `max_position_notional_usd` | 500.0 | The most one position may be **worth**, in USD. Set it to 0 to leave the exposure cap as the only notional ceiling. |
+| Notional ceiling | `max_position_notional_usd` | 50.0 | The most one position may be **worth**, in USD. Set it to 0 to leave the exposure cap as the only notional ceiling. |
 | Exposure cap | `max_exposure_pct` | 0.5 | Total notional open across all positions, as a share of equity. |
-| Available cash | `cash` (live balance) | 1000.0 | A buy pays notional plus fee out of the same balance; a short posts its whole notional as margin (`short_margin_locked`). |
-| Daily loss | `max_daily_loss` | 20 | Reaching it refuses every new trade for the day. |
+| Available cash | `cash` (live balance) | 100.0 | A buy pays notional plus fee out of the same balance; a short posts its whole notional as margin (`short_margin_locked`). |
+| Daily loss | `max_daily_loss` | 20 | Reaching it refuses every new trade for the day. On the default 100 USD account this is deliberately loose; set it to what you would actually tolerate. |
+| Minimum position | `MIN_POSITION_NOTIONAL_USD` | 5.0 | Below this a trade is refused rather than placed as dust. |
+| Minimum risk | `MIN_RISK_FRACTION` | 0.01 | A plan must risk at least 1% of its budget, or it is refused. |
+
+The account starts at **100 USD** (`starting_cash`). One position may be worth at
+most 50 USD, at most half the account may be open at once, and the default risk
+budget is 2 USD.
 
 The notional cap is in **currency, deliberately**. The old rule was a fixed
 quantity, `max_position_qty` (default 0.01), and 0.01 units is about 840 USD of

@@ -33,7 +33,7 @@ def init():
     with conn() as c:
         c.executescript(SCHEMA)
         defaults = {
-            "starting_cash": "1000",
+            "starting_cash": "100",
             "max_exposure_pct": "0.5",
             "max_daily_loss": "20",
             # Sizing is done by risk distance (qty = risk_usd / |entry - stop|);
@@ -44,7 +44,7 @@ def init():
             # BTC and SOL -- so it is only seeded so an installation that already
             # has the key keeps a value it can see.
             "max_position_qty": "0.01",
-            "max_position_notional_usd": "500",
+            "max_position_notional_usd": "50",
             "fee_bps": "4",
             "slippage_bps": "2",
             "active": "true",
@@ -58,7 +58,7 @@ def init():
         seeded = c.execute("SELECT v FROM config WHERE k='starting_cash'").fetchone()
         c.execute(
             "INSERT OR IGNORE INTO config VALUES('cash',?)",
-            (seeded["v"] if seeded else json.dumps(1000.0),),
+            (seeded["v"] if seeded else json.dumps(100.0),),
         )
         c.execute("INSERT OR IGNORE INTO config VALUES('short_margin_locked','0')")
 
@@ -66,7 +66,7 @@ def init():
 def get_cash(existing=None) -> float:
     """The live cash balance, falling back to the configured starting capital."""
     cfg = get_all(existing)
-    return float(cfg.get("cash", cfg.get("starting_cash", 1000.0)))
+    return float(cfg.get("cash", cfg.get("starting_cash", 100.0)))
 
 
 def get_margin_locked(existing=None) -> float:
@@ -129,7 +129,7 @@ def move_cash(delta: float, existing=None) -> float:
     that would take the balance below zero is refused rather than applied.
     """
     cfg = get_all(existing)
-    current = float(cfg.get("cash", cfg.get("starting_cash", 1000.0)))
+    current = float(cfg.get("cash", cfg.get("starting_cash", 100.0)))
     new = round(current + float(delta), 8)
     if new < 0:
         raise ValueError("insufficient cash")
