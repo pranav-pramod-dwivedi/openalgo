@@ -30,3 +30,15 @@ Stop with `Ctrl+C`: it cancels resting exit orders and leaves any position for m
 `event`: `start` | `signal` | `entry` | `brackets` | `tick` | `exit` | `flat` | `halt` | `error` | `stop`
 
 Each event carries its reason. Re-run analysis with `jq` on that file.
+
+## Multi-symbol and strategies
+```bash
+uv run python scripts/ai_scalper.py --symbols BTCUSDT,SOLUSDT,ETHUSDT --strategy donchian --yes
+```
+Strategies: `sma_cross` (1m price vs 9-SMA band), `donchian` (20-candle high/low breakout), `rsi_revert` (14-period RSI oversold/overbought). One open position per symbol max; native reduce-only SL/TP on every entry; per-symbol 5m max-hold; daily loss limit halts the loop.
+
+## Report
+```bash
+uv run python scripts/ai_scalper.py --report
+```
+Summarizes the journal: entries, exits, halts, errors, and last halt reason.
