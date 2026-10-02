@@ -335,3 +335,192 @@
   .pp-root .pp-allocation { margin-top: 16px; }
   .pp-root .pp-split-row > strong { font-size: 15px; }
 }
+
+/* ---------------------------------------------------------------------------
+ * Corrections applied after looking at the running pages.
+ * ------------------------------------------------------------------------- */
+
+/* 1. Section order.
+ * The ported stylesheet set `order` on the page sections (feature-grid 3,
+ * overview-grid 4) while the markup order is overview, primary, lower,
+ * feature. That rendered the feature cards above the balance cards on the
+ * overview. Markup order is the single source of truth here, so the order
+ * values and the flex column that activated them are both dropped. The
+ * page-specific orders (wallet/transactions/manage) matched their markup and
+ * are neutralised with them. */
+.pp-root .content-wrap { display: block; }
+.pp-root .page-intro,
+.pp-root .control-strip,
+.pp-root .feature-grid,
+.pp-root .overview-grid,
+.pp-root .primary-grid,
+.pp-root .lower-grid,
+.pp-root .page-footer,
+.pp-root .transaction-summary,
+.pp-root .transaction-table-card,
+.pp-root .manage-grid,
+.pp-root .manage-bottom-row,
+.pp-root .wallet-page-grid,
+.pp-root .wallet-lower-grid,
+.pp-root .wallet-ledger { order: initial; }
+
+/* 2. Underlines.
+ * The prototype only stripped them from buttons, so every <a> - the rail, the
+ * breadcrumb, the profile card, the ghost and text buttons - rendered with the
+ * browser default. Nothing here is body copy that benefits from an underline,
+ * so it is removed at the root and hover states no longer add one back. */
+.pp-root a,
+.pp-root a:hover,
+.pp-root a:focus,
+.pp-root a:visited,
+.pp-root button,
+.pp-root [role='button'],
+.pp-root .alert-row:hover strong,
+.pp-root .manage-rule-list button { text-decoration: none; }
+.pp-root .alert-row:hover strong { color: var(--ink); }
+.pp-root .manage-rule-list button:hover { color: #fff; }
+
+/* 3. Headings.
+ * The display tracking (-.075em) was tuned for Manrope. On the system stack it
+ * collides the word shapes at 48px ("Good morning" reads as one glyph run), so
+ * tracking is relaxed and the optical size corrected. */
+.pp-root h1 { letter-spacing: -.035em; line-height: 1.02; }
+.pp-root .section-heading h2,
+.pp-root .ai-card h2 { letter-spacing: -.025em; }
+.pp-root .balance-value { letter-spacing: -.045em; }
+.pp-root .wallet-balance-number { letter-spacing: -.05em; }
+.pp-root .manage-status-number { letter-spacing: -.06em; }
+
+/* 4. The rail must reach the bottom of the page, not stop at one viewport. */
+.pp-root .sidebar { position: sticky; top: 0; height: 100vh; height: 100dvh; overflow-y: auto; }
+
+@media (max-width: 1120px) {
+  .pp-root .sidebar { width: 212px; flex-basis: 212px; }
+}
+
+/* ---------------------------------------------------------------------------
+ * Live chart and market tiles.
+ * The prototype's chart had five hardcoded SVG paths; these styles draw a
+ * polyline fed by real candles, and hold the market tiles beside it.
+ * ------------------------------------------------------------------------- */
+
+.pp-root .pp-chart { display: flex; flex-direction: column; height: 100%; }
+.pp-root .pp-chart .chart-wrap { flex: 1; min-height: 180px; }
+.pp-root .pp-chart .performance-chart { width: 100%; height: 100%; }
+/* No stroke-dasharray here. The reveal was drawn as a dash offset, but the
+ * dash pattern is measured in the SVG's own 0-100 user space while the path
+ * runs to ~1500 units, so the pattern cut the most recent candles off the line
+ * and left the area fill - which has no dash - drawn past it. A reveal must not
+ * change what is drawn, so it fades instead. */
+.pp-root .pp-chart .chart-line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  /* The ported rule at line 129 sets a 1100-unit dash pattern and animates its
+   * offset, which clips the tail of the path in this 0-100 user space. Reset
+   * both rather than merely not repeating them. */
+  stroke-dasharray: none;
+  stroke-dashoffset: 0;
+  animation: pp-fade .45s ease both;
+}
+.pp-root .pp-chart .chart-area {
+  fill: rgba(10, 10, 10, .09);
+  stroke: none;
+  animation: pp-fade .45s ease both;
+}
+.pp-root .pp-chart .chart-point { fill: var(--ink); stroke: var(--surface); stroke-width: 0.4; }
+.pp-root .pp-chart .chart-grid-line { fill: none; stroke: var(--line); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
+.pp-root .pp-chart .x-axis { display: flex; justify-content: space-between; }
+.pp-root .pp-chart .heading-count { vertical-align: middle; }
+
+@keyframes pp-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.pp-root .pp-tiles { display: grid; gap: 9px; }
+.pp-root .pp-tile {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--paper);
+  overflow: hidden;
+}
+.pp-root .pp-tile-head { display: contents; }
+.pp-root .pp-tile-value { font-family: var(--mono); font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.pp-root .pp-tile-change { grid-column: 2; justify-self: end; color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+.pp-root .pp-spark {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 22px;
+  margin-top: 4px;
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: .55;
+}
+
+/* The allocation bars are shared with the prototype, so the bespoke
+ * allocation block from the first pass is redundant. */
+.pp-allocation { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-root .pp-chart .chart-line,
+  .pp-root .pp-chart .chart-area { animation: none; }
+}
+
+/* An empty panel should close to its content instead of holding the grid's
+ * minimum height open, which left a large void under "No open positions". */
+.pp-root .positions-card:has(.pp-empty),
+.pp-root .chart-card:has(.pp-empty) { min-height: auto; }
+
+/* The P&L strip is a 30-day run rather than a month grid, so it uses the same
+ * cell shape at a much higher density. */
+.pp-root .calendar-grid.pp-strip { grid-template-columns: repeat(15, 1fr); gap: 4px; }
+.pp-root .calendar-grid.pp-strip > i { min-height: 0; aspect-ratio: 1; border-radius: 4px; }
+.pp-root .pp-calendar-note { margin-top: 12px; color: var(--muted); font-size: 9px; }
+
+/* Grid rows were stretching a short panel to match a tall neighbour, which left
+ * "No open positions" sitting in a large void. */
+.pp-root .lower-grid,
+.pp-root .primary-grid,
+.pp-root .feature-grid { align-items: start; }
+
+/* The advanced-view control is deliberately quiet - it is a way out, not a
+ * headline - but it still has to read as a control. A bare .ghost-button is
+ * transparent text, which on its own card looked like a label. */
+.pp-root .pp-advanced .ghost-button {
+  padding: 10px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 700;
+  transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease;
+}
+.pp-root .pp-advanced .ghost-button:hover {
+  border-color: var(--ink);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, .07);
+}
+.pp-root .pp-advanced .text-button { padding: 4px 0; }
+
+/* The fills list has a result column and a time column; both need to line up
+   in a fixed track or the time drifts as the result grows. */
+.pp-root .activity-item .activity-result {
+  color: var(--muted-dark);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.pp-root .activity-item time { min-width: 34px; text-align: right; }

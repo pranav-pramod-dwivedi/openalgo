@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useAuthStore } from '@/stores/authStore'
-import { formatDate, money } from '../derive'
+import { formatDate, money, OWNER } from '../derive'
 import { EmptyNote, LoadingNote, UpdatedAt, useSnapshot } from '../components'
 import { toAmounts } from '../useWalletSnapshot'
 
@@ -16,19 +16,10 @@ export default function AccountPage() {
   const user = useAuthStore((state) => state.user)
   const amounts = toAmounts(snapshot.funds)
 
-  const identity = useMemo(() => {
-    const raw = (user?.username ?? '').replace(/[_-]/g, ' ').trim()
-    if (!raw) return { title: 'Local account', initials: 'LC' }
-    if (raw.toLowerCase() === 'binance_demo') return { title: 'Binance account', initials: 'BA' }
-    return {
-      title: raw.replace(/\b\w/g, (character) => character.toUpperCase()),
-      initials: raw
-        .split(/\s+/)
-        .slice(0, 2)
-        .map((part) => part[0]?.toUpperCase() ?? '')
-        .join(''),
-    }
-  }, [user?.username])
+  const identity = useMemo(
+    () => ({ title: OWNER.name, initials: OWNER.initials, subtitle: OWNER.subtitle }),
+    []
+  )
 
   if (snapshot.loading && !snapshot.funds) {
     return (
@@ -59,7 +50,7 @@ export default function AccountPage() {
           <div className="account-identity-top">
             <div className="account-avatar-large">{identity.initials}</div>
             <div>
-              <span className="card-label inverse-label">Local session</span>
+              <span className="card-label inverse-label">{identity.subtitle}</span>
               <h2>{identity.title}</h2>
               <p>{user?.broker ? `${user.broker} venue` : 'No broker connected'}</p>
             </div>
@@ -82,10 +73,10 @@ export default function AccountPage() {
           <div className="settings-list">
             <div>
               <span>
-                <strong>Signed in as</strong>
+                <strong>Owner</strong>
                 <small>Single local session, no remote account</small>
               </span>
-              <b>{user?.username ?? 'Unknown'}</b>
+              <b>{OWNER.name}</b>
             </div>
             <div>
               <span>

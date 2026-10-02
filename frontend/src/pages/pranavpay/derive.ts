@@ -347,3 +347,19 @@ export function introFor(date: Date, hasPositions: boolean): string {
 export function shortNumber(value: number): string {
   return numberFormat.format(value)
 }
+
+/**
+ * Who this workspace belongs to.
+ *
+ * The kiosk session is a single local account called binance_demo, so deriving
+ * the display name from the session produced "Binance account" in the rail and
+ * "Binance Demo" on the account page - the account's own label, not the
+ * operator's. This deployment is one person, so the owner is stated here and
+ * the session is only used to decide whether an exchange is connected.
+ */
+export const OWNER = {
+  name: 'Pranav Dwivedi',
+  firstName: 'pranav',
+  initials: 'PD',
+  subtitle: 'Personal account',
+} as const

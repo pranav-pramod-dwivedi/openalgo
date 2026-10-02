@@ -7,6 +7,7 @@ Note: The /historify page is served by react_app.py (React frontend).
 """
 
 import os
+import re
 import tempfile
 
 from flask import Blueprint, Response, jsonify, request, send_file, session
@@ -1553,3 +1554,72 @@ def get_schedule_executions(schedule_id):
     except Exception as e:
         logger.exception(f"Error getting executions: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# =============================================================================
+# PranavPay chart feed
+# =============================================================================
+# The PranavPay surface draws a real price line, which needs real candles. The
+# existing download/export routes write DuckDB files for batch work; this one
+# is a read-only JSON feed over the same public Binance klines that
+# services/foreign_data_service.get_foreign_history already fetches and caches,
+# so the surface never invents a curve and never re-implements the fetcher.
+
+
+@historify_bp.route("/api/candles", methods=["GET"])
+@check_session_validity
+def get_candles():
+    """Return recent candles for one crypto symbol as JSON."""
+    symbol = (request.args.get("symbol") or "").strip().upper()
+    interval = (request.args.get("interval") or "1h").strip()
+    limit = min(max(request.args.get("limit", 168, type=int), 2), 1000)
+
+    if not symbol:
+        return jsonify({"status": "error", "message": "symbol is required"}), 400
+
+    # Validate the shape rather than trusting the query string: this value goes
+    # into an outbound URL, and the intervals Binance accepts are a short list.
+    allowed_intervals = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w"}
+    if interval not in allowed_intervals:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": f"interval must be one of {sorted(allowed_intervals)}",
+                }
+            ),
+            400,
+        )
+    if not re.fullmatch(r"[A-Z0-9]{2,20}", symbol):
+        return jsonify({"status": "error", "message": "symbol is not a valid market"}), 400
+
+    try:
+        from services.foreign_data_service import get_foreign_history
+
+        candles = get_foreign_history(
+            symbol, "CRYPTO", interval, "", ""
+        )
+        if not candles:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "The exchange returned no candles for that market",
+                    }
+                ),
+                502,
+            )
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "symbol": symbol,
+                    "interval": interval,
+                    "data": candles[-limit:],
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        logger.exception(f"Error fetching candles for {symbol}: {e}")
+        return jsonify({"status": "error", "message": "Could not read candles"}), 500

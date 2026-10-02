@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router'
-import { useAuthStore } from '@/stores/authStore'
+import { OWNER } from './derive'
 import { useWalletSnapshot } from './useWalletSnapshot'
 
 const SECTIONS = [
@@ -9,6 +9,19 @@ const SECTIONS = [
   { to: '/transactions', label: 'Transactions', icon: 'list', end: false },
   { to: '/manage', label: 'Manage', icon: 'gear', end: false },
 ] as const
+
+/**
+ * Every section the breadcrumb can name, including the two that are not in the
+ * rail. The account page is reached from the profile card, so without it here
+ * the breadcrumb fell back to "Quick overview" and every page after Wallet
+ * reported the wrong name.
+ */
+const CRUMB_LABELS: Array<[string, string]> = [
+  ['/wallet', 'Wallet'],
+  ['/transactions', 'Transactions'],
+  ['/manage', 'Manage'],
+  ['/account', 'Account settings'],
+]
 
 const ICONS: Record<string, React.ReactNode> = {
   grid: (
@@ -55,7 +68,6 @@ const MOBILE_LABELS: Record<string, string> = {
 export default function Shell() {
   const location = useLocation()
   const snapshot = useWalletSnapshot()
-  const user = useAuthStore((state) => state.user)
   const [scrolled, setScrolled] = useState(false)
 
   useEffect(() => {
@@ -65,27 +77,18 @@ export default function Shell() {
     return () => window.removeEventListener('scroll', onScroll)
   }, [])
 
-  const active = useMemo(
-    () => SECTIONS.find((section) => (section.end ? location.pathname === section.to : location.pathname.startsWith(section.to)))?.label ?? 'Quick overview',
-    [location.pathname]
-  )
+  const active = useMemo(() => {
+    const match = CRUMB_LABELS.find(([path]) => location.pathname.startsWith(path))
+    if (match) return match[1]
+    return SECTIONS.find((section) =>
+      section.end
+        ? location.pathname === section.to
+        : location.pathname.startsWith(section.to)
+    )?.label ?? 'Quick overview'
+  }, [location.pathname])
 
-  const initials = useCallback(() => {
-    const name = user?.username?.replace(/[_-]/g, ' ').trim() ?? ''
-    if (!name || name === 'binance_demo') return 'PP'
-    return name
-      .split(/\s+/)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase() ?? '')
-      .join('')
-  }, [user?.username])
-
-  const displayName = useMemo(() => {
-    const name = user?.username?.replace(/[_-]/g, ' ').trim() ?? ''
-    if (!name) return 'Local account'
-    if (name.toLowerCase() === 'binance_demo') return 'Binance account'
-    return name.replace(/\b\w/g, (character) => character.toUpperCase())
-  }, [user?.username])
+  const initials = OWNER.initials
+  const displayName = OWNER.name
 
   const reachable = snapshot.funds !== null
 
@@ -122,10 +125,10 @@ export default function Shell() {
 
           <div className="rail-label">Account</div>
           <NavLink to="/account" className="profile-card">
-            <div className="avatar">{initials()}</div>
+            <div className="avatar">{initials}</div>
             <div className="profile-copy">
               <strong>{displayName}</strong>
-              <span>{reachable ? 'Binance account' : 'Connecting'}</span>
+              <span>{OWNER.subtitle}</span>
             </div>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="m9 18 6-6-6-6" />

@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Link } from 'react-router'
-import { assetGlyph, assetName, money, qty, signedMoney, toFillRows } from '../derive'
+import { assetGlyph, assetName, money, qty, relativeTime, signedMoney, toFillRows } from '../derive'
 import { EmptyNote, LoadingNote, StaleNote, UpdatedAt, useSnapshot } from '../components'
 import { toAmounts } from '../useWalletSnapshot'
 
@@ -168,7 +168,10 @@ export default function WalletPage() {
                       {qty(fill.quantity)} at {money(fill.price)} · {fill.product}
                     </span>
                   </div>
-                  <time>{signedMoney(fill.pnl ?? fill.value)}</time>
+                  {/* The result belongs beside the fill, not in the time slot,
+                      where a P&L figure reads as a timestamp. */}
+                  <span className="activity-result">{signedMoney(fill.pnl ?? fill.value)}</span>
+                  <time>{relativeTime(fill.at)}</time>
                 </div>
               ))}
             </div>
