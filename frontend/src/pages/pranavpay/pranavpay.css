@@ -402,16 +402,19 @@
  * Live chart and market tiles.
  * The prototype's chart had five hardcoded SVG paths; these styles draw a
  * polyline fed by real candles, and hold the market tiles beside it.
+ *
+ * The plot is absolutely positioned inside its wrapper. The SVG carries a square
+ * viewBox, so left in normal flow it took its intrinsic height from its width -
+ * a 772px card rendered a 676px-tall plot, which grew the wrapper, the chart and
+ * the card to 843px and left the chart column twice the height of the AI card
+ * beside it. Out of flow, the wrapper's height is the only thing that decides
+ * the card's height.
  * ------------------------------------------------------------------------- */
 
-.pp-root .pp-chart { display: flex; flex-direction: column; height: 100%; }
-.pp-root .pp-chart .chart-wrap { flex: 1; min-height: 180px; }
-.pp-root .pp-chart .performance-chart { width: 100%; height: 100%; }
-/* No stroke-dasharray here. The reveal was drawn as a dash offset, but the
- * dash pattern is measured in the SVG's own 0-100 user space while the path
- * runs to ~1500 units, so the pattern cut the most recent candles off the line
- * and left the area fill - which has no dash - drawn past it. A reveal must not
- * change what is drawn, so it fades instead. */
+.pp-root .pp-chart { display: flex; flex-direction: column; }
+.pp-root .pp-chart .chart-wrap { position: relative; flex: none; min-height: 0; width: 100%; }
+.pp-root .pp-chart .performance-chart { position: absolute; inset: 0; width: 100%; height: 100%; }
+.pp-root .pp-chart .x-axis { position: absolute; }
 .pp-root .pp-chart .chart-line {
   fill: none;
   stroke: var(--ink);
@@ -419,26 +422,26 @@
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
-  /* The ported rule at line 129 sets a 1100-unit dash pattern and animates its
-   * offset, which clips the tail of the path in this 0-100 user space. Reset
-   * both rather than merely not repeating them. */
+  /* The ported rule sets a 1100-unit dash pattern and animates its offset,
+   * which clips the tail of the path in this 0-100 user space. Reset both
+   * rather than merely not repeating them. */
   stroke-dasharray: none;
   stroke-dashoffset: 0;
   animation: pp-fade .45s ease both;
 }
-.pp-root .pp-chart .chart-area {
-  fill: rgba(10, 10, 10, .09);
-  stroke: none;
-  animation: pp-fade .45s ease both;
-}
+.pp-root .pp-chart .chart-area { fill: rgba(10, 10, 10, .09); stroke: none; animation: pp-fade .45s ease both; }
 .pp-root .pp-chart .chart-point { fill: var(--ink); stroke: var(--surface); stroke-width: 0.4; }
 .pp-root .pp-chart .chart-grid-line { fill: none; stroke: var(--line); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
-.pp-root .pp-chart .x-axis { display: flex; justify-content: space-between; }
 .pp-root .pp-chart .heading-count { vertical-align: middle; }
 
 @keyframes pp-fade {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-root .pp-chart .chart-line,
+  .pp-root .pp-chart .chart-area { animation: none; }
 }
 
 .pp-root .pp-tiles { display: grid; gap: 9px; }
@@ -489,11 +492,18 @@
 .pp-root .calendar-grid.pp-strip > i { min-height: 0; aspect-ratio: 1; border-radius: 4px; }
 .pp-root .pp-calendar-note { margin-top: 12px; color: var(--muted); font-size: 9px; }
 
-/* Grid rows were stretching a short panel to match a tall neighbour, which left
- * "No open positions" sitting in a large void. */
+/* Rows share a height so the grid reads as one band. An earlier
+ * align-items: start stopped an empty panel stretching but left every row
+ * visibly ragged - a 176px card beside a 434px one - which reads as a fault
+ * rather than a choice. */
 .pp-root .lower-grid,
 .pp-root .primary-grid,
-.pp-root .feature-grid { align-items: start; }
+.pp-root .feature-grid { align-items: stretch; }
+
+/* A card stretched by a taller neighbour centres its empty state, so the spare
+ * height reads as deliberate space rather than a truncated panel. */
+.pp-root .surface-card { display: flex; flex-direction: column; }
+.pp-root .surface-card > .pp-empty { margin: auto 0; flex: 1; align-content: center; }
 
 /* The advanced-view control is deliberately quiet - it is a way out, not a
  * headline - but it still has to read as a control. A bare .ghost-button is
@@ -524,3 +534,18 @@
   text-align: right;
 }
 .pp-root .activity-item time { min-width: 34px; text-align: right; }
+
+/* The Markets card is the odd card out of seven, so it landed alone on the last
+ * row of a three-column grid and read as an accident. Spanning the row makes the
+ * spacing deliberate and gives the tiles room to sit side by side. */
+.pp-root .feature-grid .markets-card { grid-column: 1 / -1; }
+.pp-root .feature-grid .markets-card .pp-tiles {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+/* The last axis label sat flush against the card edge. */
+.pp-root .pp-chart .x-axis { padding-right: 2px; }
+
+@media (max-width: 760px) {
+  .pp-root .feature-grid .markets-card { grid-column: auto; }
+}
