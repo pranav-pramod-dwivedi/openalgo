@@ -3,13 +3,56 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from services.paper import db, jev  # noqa: E402
 from services.paper.config import load  # noqa: E402
+
+
+def _ago(ts) -> str:
+    try:
+        secs = max(0, int(time.time() - float(ts)))
+    except (TypeError, ValueError):
+        return "not yet"
+    if secs < 90:
+        return "moments ago"
+    if secs < 5400:
+        return f"{secs // 60} minutes ago"
+    return f"{secs // 3600} hours ago"
+
+
+def _plain(payload: str) -> str:
+    """Turn an internal refusal code into a sentence."""
+    try:
+        data = json.loads(payload)
+    except Exception:
+        return "nothing that met its criteria"
+    reason = data.get("refusal_reason") or data.get("reason") or ""
+    words = {
+        "no_edge": "no strategy had a setup worth taking",
+        "no_setup": "the strategy had no signal right now",
+        "analyst_unavailable": "the AI reviewer could not be reached",
+        "insufficient_cash": "not enough virtual cash left",
+        "exposure_cap": "already using as much of the portfolio as allowed",
+        "daily_loss_limit": "today's losses reached the limit set for the day",
+        "symbol_already_open": "a trade in that coin is already open",
+        "stale_data": "the price data was too old to trust",
+        "kill_switch": "you had stopped it",
+        "planner_unavailable": "the planner was not available",
+    }
+    return words.get(reason, reason.replace("_", " ") or "nothing that met its criteria")
+
+
+def _net(metrics: str) -> float:
+    try:
+        return float(json.loads(metrics or "{}").get("net_pnl", float("-inf")))
+    except Exception:
+        return float("-inf")
 
 
 def main() -> int:
@@ -43,26 +86,42 @@ def main() -> int:
         val = hb[name]
         return default if val in (None, "") else val
 
-    print("\n  PAPER TRADING - VIRTUAL MONEY")
-    print(f"  analyst            : {jev.MODEL} ({'key found' if jev._key() else 'no key in .env'})")
-    print(f"  analyst last fault : {jev.failure_reason() or 'none'}")
-    print(f"  kill switch        : {'HALTED, not trading' if halted else 'running'}")
-    print(f"  watchlist          : {', '.join(watchlist)}")
-    print(f"  virtual cash       : {cash:,.2f}")
+    fault = jev.failure_reason()
+    print("\n  PAPER TRADING - VIRTUAL MONEY (no real money involved)")
+    if fault:
+        print(f"  AI reviewer        : unavailable - {fault}")
+    elif jev._key():
+        print("  AI reviewer        : ready - it reviews each trade when it can be reached")
+    else:
+        print("  AI reviewer        : not set up, so nothing reviews the trades")
+    print(f"  Trading            : {'STOPPED' if halted else 'ON, working on its own'}")
+    print(f"  Watching           : {', '.join(s.replace('USDT', '') for s in watchlist)}")
+    print(f"  Virtual cash       : {cash:,.2f} USD")
     if equity is not None:
-        print(f"  equity             : {equity:,.2f}")
-    print(f"  open positions     : {len(positions)}")
+        print(f"  Total value        : {equity:,.2f} USD")
+    print(f"  Open trades        : {len(positions)}")
     for p in positions:
         mark = p["mark"] if "mark" in p.keys() else None
         print(f"    {p['symbol']:<10} {p['side']:<5} qty {p['qty']:<10} entry {p['entry']} mark {mark}")
-    print(f"  strategies active  : {len(strategies)}")
-    for s in strategies:
-        print(f"    {s['id']:<24} {s['status']:<8} {s['metrics']}")
-    print(f"  experiments run    : {experiments}")
-    print(f"  worker heartbeat   : {hbval('ts')} status={hbval('status')} cycle={hbval('cycle')}")
-    print(f"  last planner call  : {hbval('planner_verdict')} ({hbval('refusal_reason')})")
+    ranked = sorted(strategies, key=lambda r: _net(r["metrics"]), reverse=True)
+    print(f"  Strategies ready   : {len(strategies)} (showing the 5 with the best backtest)")
+    for s in ranked[:5]:
+        m = json.loads(s["metrics"]) if s["metrics"] else {}
+        print(
+            f"    {s['id']:<26} {m.get('trades', '?')} backtest trades, "
+            f"net {m.get('net_pnl', '?')} USD, worst dip {m.get('max_drawdown', '?')} USD"
+        )
+    print(f"  strategies tested  : {experiments} in total")
+    print(f"  Last check         : {_ago(hbval('ts'))}")
+    verdict = hbval("planner_verdict")
+    if verdict == "halted":
+        print("  Last decision      : stopped, waiting to be started")
+    elif verdict == "executed":
+        print("  Last decision      : placed a trade")
+    else:
+        print("  Last decision      : decided not to trade (no good setup right now)")
     if skipped:
-        print(f"  last refusal       : {skipped['payload'][:160]}")
+        print(f"  Why                : {_plain(skipped['payload'])}")
     print()
     return 0
 
