@@ -7,20 +7,31 @@ import uuid
 
 from utils.logging import get_logger
 
-from . import db, jev
-from .backtest import backtest
+from . import config, db, jev
+from .backtest import backtest_matrix, drawdown_pct, plan_matrix
 from .strategies import FAMILIES, PARAM_GRID
 
 logger = get_logger(__name__)
 
-DEFAULT_WATCHLIST = ["BTCUSDT", "SOLUSDT", "ETHUSDT"]
-DEFAULT_INTERVAL = "5m"
+# One list of defaults, owned by the config module: the watchlist and the
+# research timeframes are configuration, not engine literals.
+DEFAULT_WATCHLIST = list(config.DEFAULT_SYMBOLS)
+DEFAULT_INTERVAL = config.DEFAULT_INTERVAL
+DEFAULT_RESEARCH_INTERVALS = list(config.DEFAULT_RESEARCH_INTERVALS)
 
 # Kept as the module-level name other readers may still import. It is only the
 # fallback now: the live watchlist comes from the config table on every cycle.
 WATCHLIST = DEFAULT_WATCHLIST
 
+# The timeframes the engine can be asked for. 15m and 1h are here as well as
+# 5m, because research validates on them and a validated strategy has to be
+# tradeable on the timeframe it was validated on.
 ALLOWED_INTERVALS = ("1m", "3m", "5m", "15m", "30m", "1h")
+
+# Research rotates the watchlist by this many places each cycle, so a capped
+# cycle serves every symbol in turn instead of exhausting the first one forever.
+KEY_RESEARCH_CURSOR = "research_cursor"
+MIRROR_HYPOTHESIS = "research-symbol-mirror"
 
 # Quote payloads differ by provider, so a mark is taken from the first key that
 # actually carries a price rather than assuming one shape.
@@ -156,6 +167,47 @@ def resolve_interval() -> str:
     return validate_interval(stored)
 
 
+def resolve_research_intervals() -> list[str]:
+    """The timeframes research validates each symbol on. Falls back to the default."""
+    try:
+        stored = db.get("research_intervals", None)
+    except Exception:
+        return list(DEFAULT_RESEARCH_INTERVALS)
+    if stored is None:
+        return list(DEFAULT_RESEARCH_INTERVALS)
+    try:
+        intervals = config.normalize_intervals(stored)
+    except Exception:
+        return list(DEFAULT_RESEARCH_INTERVALS)
+    return [iv for iv in intervals if iv in ALLOWED_INTERVALS] or list(DEFAULT_RESEARCH_INTERVALS)
+
+
+def resolve_experiment_cap() -> int:
+    """The per-cycle backtest budget, so a wider grid cannot balloon a cycle."""
+    try:
+        stored = db.get("research_max_experiments", None)
+    except Exception:
+        return config.DEFAULT_RESEARCH_MAX_EXPERIMENTS
+    if stored is None:
+        return config.DEFAULT_RESEARCH_MAX_EXPERIMENTS
+    try:
+        return max(1, int(float(stored)))
+    except (TypeError, ValueError):
+        return config.DEFAULT_RESEARCH_MAX_EXPERIMENTS
+
+
+def validation_bar() -> dict:
+    """The configured bar a backtest must clear: trades, net P&L, drawdown."""
+    try:
+        return config.load().validation_bar()
+    except Exception:
+        return {
+            "min_trades": config.DEFAULT_MIN_TRADES,
+            "min_net_pnl": config.DEFAULT_MIN_NET_PNL,
+            "max_drawdown_pct": config.DEFAULT_MAX_DRAWDOWN_PCT,
+        }
+
+
 def _settings(watchlist=None, interval=None) -> tuple[list[str], str]:
     """Per-call overrides win; anything omitted comes from the config table."""
     wl = list(watchlist) if watchlist else resolve_watchlist()
@@ -206,9 +258,6 @@ def _mark(symbol: str, fallback: float | None = None) -> tuple[float | None, boo
     return fallback, False
 
 
-
-
-
 def mark_open_positions() -> tuple[list[dict], float]:
     """Mark every open position to market and return (positions, unrealized).
 
@@ -251,51 +300,280 @@ def mark_open_positions() -> tuple[list[dict], float]:
     return marks, unrealized
 
 
+def strategy_id(family: str, symbol: str, interval: str) -> str:
+    """Build a strategy id. The timeframe is part of it, not a note beside it.
+
+    ``donchian-BTCUSDT-15m`` says what was validated and where. Without the
+    suffix a 15m-validated 20-period lookback would be applied to 5m candles as
+    if it were the same strategy, and it is not.
+    """
+    return f"{family}-{symbol}-{interval}"
+
+
+def parse_strategy_id(sid: str) -> tuple[str, str, str | None]:
+    """Split a strategy id into ``(family, symbol, interval)``.
+
+    The interval is ``None`` for rows registered before it was recorded; those
+    stay tradable, because refusing them would silently unregister strategies
+    that an older research cycle legitimately validated.
+    """
+    text = str(sid or "")
+    family, _, rest = text.partition("-")
+    if not rest:
+        return text, "", None
+    symbol, sep, interval = rest.rpartition("-")
+    if sep and symbol and interval in ALLOWED_INTERVALS:
+        return family, symbol, interval
+    return family, rest, None
+
+
+def passes_validation(metrics: dict, bar: dict | None = None) -> tuple[bool, str]:
+    """Return ``(passed, reason)`` for one backtest result.
+
+    The configured bar sets the size of the hurdle, not whether a loss can pass
+    it. A negative net P&L is refused here whatever ``min_net_pnl`` says: a
+    losing backtest registered as active is the engine trading a known loser.
+    """
+    bar = bar or validation_bar()
+    trades = int(metrics.get("trades", 0) or 0)
+    net = float(metrics.get("net_pnl", 0.0) or 0.0)
+    dd_pct = drawdown_pct(metrics)
+    if net <= 0:
+        return False, f"net_pnl {net:g} is not positive"
+    min_net = float(bar.get("min_net_pnl", 0.0) or 0.0)
+    if net < min_net:
+        return False, f"net_pnl {net:g} is below the minimum {min_net:g}"
+    min_trades = int(bar.get("min_trades", 0) or 0)
+    if trades < min_trades:
+        return False, f"trades {trades} is below the minimum {min_trades}"
+    max_dd = float(bar.get("max_drawdown_pct", 100.0) or 100.0)
+    if dd_pct >= max_dd:
+        return False, f"drawdown {dd_pct:g}% is at or above the {max_dd:g}% limit"
+    return True, "ok"
+
+
+def _rotate(values: list, cursor: int) -> list:
+    """Rotate a list by ``cursor`` places, wrapping. Keeps a capped cycle fair."""
+    if not values:
+        return []
+    start = cursor % len(values)
+    return values[start:] + values[:start]
+
+
 def research_cycle(watchlist=None, interval=None) -> None:
-    """Generate experiments, backtest, register validated strategies."""
+    """Backtest the grid across symbols and timeframes, register what clears the bar.
+
+    A cycle is bounded twice: by the per-cycle experiment cap, and by the fact
+    that whatever the cap leaves out is counted and logged rather than run
+    quietly forever. Both bounds matter because the grid now covers nine symbols
+    on three timeframes.
+    """
     watchlist, interval = _settings(watchlist, interval)
-    db.log("research_start", {"watchlist": watchlist, "interval": interval})
-    strategies = []
-    exps = []
-    for symbol in watchlist:
-        c = _candles(symbol, interval)
-        if len(c) < 60:
+    intervals = resolve_research_intervals()
+    cap = resolve_experiment_cap()
+    bar = validation_bar()
+    cursor = 0
+    try:
+        cursor = int(db.get(KEY_RESEARCH_CURSOR, 0) or 0)
+    except Exception:
+        cursor = 0
+    order = _rotate(list(watchlist), cursor)
+    db.log(
+        "research_start",
+        {
+            "watchlist": watchlist,
+            "interval": interval,
+            "research_intervals": intervals,
+            "max_experiments": cap,
+            "bar": bar,
+        },
+    )
+
+    experiments: list[tuple] = []
+    registered: dict[str, dict] = {}
+    skipped: list[dict] = []
+    truncated = 0
+    failed: list[dict] = []
+
+    for symbol in order:
+        remaining = cap - len(experiments)
+        if remaining <= 0:
+            # The budget is spent. Everything left is named in the summary
+            # below rather than silently dropped, and the next cycle starts one
+            # symbol further along so no symbol is left permanently unresearched.
+            truncated += len(plan_matrix(intervals))
             continue
-        for family, grid in PARAM_GRID.items():
-            for params in grid:
-                r = backtest(c, family, params)
-                exp_id = f"exp-{family}-{symbol}-{abs(hash(json.dumps(params, sort_keys=True))) % 10_000_000}"
-                exps.append(
-                    (
-                        exp_id,
-                        "research",
-                        json.dumps({"symbol": symbol, "params": params}),
-                        json.dumps(r),
-                        time.time(),
-                        "ok" if r["trades"] > 0 else "no_trades",
-                    )
+        result = backtest_matrix(
+            symbol,
+            intervals,
+            lambda sym, iv: _candles(sym, iv),
+            max_experiments=remaining,
+        )
+        truncated += result["truncated"]
+        for skip in result["skipped"]:
+            skipped.append({"symbol": symbol, **skip})
+        for exp in result["experiments"]:
+            metrics = exp["metrics"]
+            experiments.append(
+                (
+                    _experiment_id(exp["family"], symbol, exp["interval"], exp["params"]),
+                    "research",
+                    json.dumps(
+                        {"symbol": symbol, "interval": exp["interval"], "params": exp["params"]}
+                    ),
+                    json.dumps(metrics),
+                    time.time(),
+                    "ok" if metrics["trades"] > 0 else "no_trades",
                 )
-                # validate: at least 3 trades, positive net, bounded drawdown
-                if r["trades"] >= 3 and r["net_pnl"] > 0 and r["max_drawdown"] < 50:
-                    sid = f"{family}-{symbol}"
-                    strategies.append(
-                        (
-                            sid,
-                            "research",
-                            family,
-                            json.dumps(params),
-                            json.dumps(r),
-                            "active",
-                            time.time(),
-                            1,
-                        )
-                    )
-                    db.log("strategy_registered", {"id": sid, "params": params, "metrics": r})
+            )
+            passed, why = passes_validation(metrics, bar)
+            if not passed:
+                failed.append(
+                    {
+                        "family": exp["family"],
+                        "symbol": symbol,
+                        "interval": exp["interval"],
+                        "reason": why,
+                    }
+                )
+                continue
+            sid = strategy_id(exp["family"], symbol, exp["interval"])
+            previous = registered.get(sid)
+            if previous is None or _better(metrics, previous["metrics"]):
+                registered[sid] = {
+                    "family": exp["family"],
+                    "symbol": symbol,
+                    "interval": exp["interval"],
+                    "params": exp["params"],
+                    "metrics": metrics,
+                }
+
+    rows = [
+        (
+            sid,
+            "research",
+            entry["family"],
+            json.dumps(entry["params"]),
+            json.dumps(entry["metrics"]),
+            "active",
+            time.time(),
+            1,
+        )
+        for sid, entry in registered.items()
+    ]
+    rows.extend(_mirror_rows(registered, interval))
     with db.conn() as c:
-        for e in exps:
+        for e in experiments:
             c.execute("INSERT OR REPLACE INTO experiments VALUES(?,?,?,?,?,?)", e)
-        for st in strategies:
+        for st in rows:
             c.execute("INSERT OR REPLACE INTO strategies VALUES(?,?,?,?,?,?,?,?)", st)
+    if watchlist:
+        db.setc(KEY_RESEARCH_CURSOR, (cursor + 1) % len(watchlist))
+
+    for sid, entry in registered.items():
+        db.log(
+            "strategy_registered",
+            {
+                "id": sid,
+                "interval": entry["interval"],
+                "params": entry["params"],
+                "metrics": entry["metrics"],
+            },
+        )
+    summary = {
+        "symbols": order,
+        "research_intervals": intervals,
+        "experiments": len(experiments),
+        "registered": len(registered),
+        "skipped": len(skipped),
+        "truncated": truncated,
+        "cap": cap,
+        "rejected": len(failed),
+    }
+    if truncated:
+        # The cap is a decision the operator made, so the cycle says it happened.
+        logger.info(
+            f"Research hit the per-cycle cap of {cap} experiments; "
+            f"{truncated} planned experiments were left for the next cycle"
+        )
+        db.log("research_capped", summary)
+    if skipped:
+        logger.info(
+            f"Research skipped {len(skipped)} symbol/timeframe combinations with no usable candles"
+        )
+    db.log("research_done", summary)
+    return summary
+
+
+def _experiment_id(family: str, symbol: str, interval: str, params: dict) -> str:
+    """A stable id for one experiment, so a re-run replaces rather than piles up."""
+    key = json.dumps({"f": family, "s": symbol, "i": interval, "p": params}, sort_keys=True)
+    return f"exp-{family}-{symbol}-{interval}-{abs(hash(key)) % 10_000_000}"
+
+
+def _better(metrics: dict, incumbent: dict) -> bool:
+    """Rank two passing results for the same strategy: P&L first, trades to break ties."""
+    if float(metrics.get("net_pnl", 0.0)) != float(incumbent.get("net_pnl", 0.0)):
+        return float(metrics.get("net_pnl", 0.0)) > float(incumbent.get("net_pnl", 0.0))
+    return int(metrics.get("trades", 0)) > int(incumbent.get("trades", 0))
+
+
+def _mirror_rows(registered: dict, trading_interval: str) -> list:
+    """Symbol-level rows in the legacy ``family-SYMBOL`` shape, for the planner.
+
+    ``planner._strategies_for`` matches a strategy to a symbol by taking
+    everything after the first dash of its id, so a row carrying a timeframe in
+    its id is invisible to it. planner.py is not owned here and was not changed,
+    so the best validated strategy per family and symbol is also written under
+    the legacy id, preferring the timeframe the worker actually trades. These
+    rows carry the same metrics and are re-validated by the planner on its own
+    bar before anything is traded.
+    """
+    best: dict[tuple[str, str], dict] = {}
+    for entry in registered.values():
+        key = (entry["family"], entry["symbol"])
+        current = best.get(key)
+        if current is None:
+            best[key] = entry
+            continue
+        same_interval = entry["interval"] == current["interval"]
+        wants_trading = entry["interval"] == trading_interval
+        current_wants = current["interval"] == trading_interval
+        if wants_trading and not current_wants:
+            best[key] = entry
+        elif same_interval and _better(entry["metrics"], current["metrics"]):
+            best[key] = entry
+        elif (
+            wants_trading == current_wants
+            and not same_interval
+            and _better(entry["metrics"], current["metrics"])
+        ):
+            best[key] = entry
+
+    rows = []
+    for (family, symbol), entry in best.items():
+        rows.append(
+            (
+                f"{family}-{symbol}",
+                MIRROR_HYPOTHESIS,
+                family,
+                json.dumps(entry["params"]),
+                json.dumps(entry["metrics"]),
+                "active",
+                time.time(),
+                1,
+            )
+        )
+        db.log(
+            "strategy_mirrored",
+            {
+                "id": f"{family}-{symbol}",
+                "from": strategy_id(family, symbol, entry["interval"]),
+                "params": entry["params"],
+                "metrics": entry["metrics"],
+            },
+        )
+    return rows
 
 
 def trading_cycle(watchlist=None, interval=None) -> None:
@@ -303,26 +581,34 @@ def trading_cycle(watchlist=None, interval=None) -> None:
 
     A strategy registered by an earlier research cycle can outlive a watchlist
     change, so symbols outside the current watchlist are skipped rather than
-    traded.
+    traded. A strategy validated on one timeframe is also skipped on another:
+    the id carries the timeframe it was validated on, and a setup tuned to 15m
+    candles is a different strategy when fed 5m ones.
     """
     db.init()
     # The position write below carries a mark, so the column must exist before
     # the first signal rather than waiting for _record_equity at cycle end.
     db.ensure_column("positions", "mark", "REAL")
     watchlist, interval = _settings(watchlist, interval)
+    mismatched = 0
     with db.conn() as c:
         strats = c.execute("SELECT * FROM strategies WHERE status='active'").fetchall()
     for s in strats:
-        symbol = s["id"].split("-", 1)[1]
+        family, symbol, validated_on = parse_strategy_id(s["id"])
+        if not symbol:
+            continue
         if symbol not in watchlist:
+            continue
+        if validated_on is not None and validated_on != interval:
+            mismatched += 1
             continue
         c = _candles(symbol, interval)
         if len(c) < 30:
             continue
-        fn = FAMILIES[s["family"]]
+        fn = FAMILIES[family]
         sig = fn(c, **json.loads(s["params"]))
         if sig:
-            state = f"{symbol} {s['family']} signal={sig} last={float(c[-1]['close']):.2f} regime={json.loads(s['metrics']).get('net_pnl', 0)}"
+            state = f"{symbol} {family} interval={interval} signal={sig} last={float(c[-1]['close']):.2f} regime={json.loads(s['metrics']).get('net_pnl', 0)}"
             verdict = jev.ask(
                 state,
                 {
@@ -426,6 +712,13 @@ def trading_cycle(watchlist=None, interval=None) -> None:
                     {"symbol": symbol, "side": sig, "qty": qty, "strategy": s["id"]},
                     cc,
                 )
+    if mismatched:
+        # Strategies validated on other timeframes stay registered and simply do
+        # not apply here. Worth saying out loud, because otherwise a widened
+        # research grid looks like it produced fewer signals than it did.
+        logger.info(
+            f"Skipped {mismatched} active strategies validated on a timeframe other than {interval}"
+        )
     _record_equity()
 
 

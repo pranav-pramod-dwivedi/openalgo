@@ -59,7 +59,7 @@ takes effect for a worker started later:
 | Cadence | Default | What it does |
 | --- | --- | --- |
 | Monitor | 60s | Signals, paper orders, fills, positions, equity snapshot |
-| Research | 300s | Backtest grid across the strategy families, strategy registration |
+| Research | 300s | Backtest grid across symbols, timeframes and strategy families; strategy registration |
 
 Research is the expensive half, so it runs on its own, slower clock. A monitor
 tick runs research only when the research interval has elapsed, then does its own
@@ -91,31 +91,116 @@ uv run python scripts/paper_worker.py --symbols BTCUSDT,SOLUSDT --interval 15m
 ```
 
 Both are persisted in the config table, so a restart keeps them; nothing has to
-be passed again. Defaults are `BTCUSDT,SOLUSDT,ETHUSDT` and `5m`. Symbols are
-uppercased and de-duplicated, and an unknown interval falls back to `5m` rather
-than being rejected. Allowed intervals: `1m 3m 5m 15m 30m 1h 2h 4h 1d`.
+be passed again. The default watchlist is nine liquid Binance pairs:
 
-### Watchlist limitation
+```
+BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, LINKUSDT, AVAXUSDT
+```
 
-**The configured watchlist does not yet change what the engine trades.**
-`services/paper/engine.py` reads its symbols from the module-level constant
-`WATCHLIST` and its timeframe from a `"5m"` literal inside `_candles`. Neither is
-a parameter, a config read, or anything the worker can set without editing
-`engine.py`, which is out of scope here.
+They are chosen for depth and history, not for a story: a thin pair cannot be
+backtested honestly. The default timeframe is `5m`. Symbols are uppercased and
+de-duplicated, and an unknown interval falls back to `5m` rather than being
+rejected. Intervals accepted by config: `1m 3m 5m 15m 30m 1h 2h 4h 1d`. The
+engine itself can be asked for `1m 3m 5m 15m 30m 1h` (`engine.ALLOWED_INTERVALS`),
+which includes the `15m` and `1h` that research validates on.
 
-So today:
+The engine reads the watchlist from the config table on every cycle, so a
+`--symbols` change lands on the next cycle and there is no second list to edit.
 
-- `--symbols` and `--interval` are stored, validated, shown by `--status`, and
-  recorded in every heartbeat, so the intended configuration is durable and
-  visible.
-- The symbols actually backtested and traded remain `engine.WATCHLIST`, and the
-  candles remain `5m`.
+## Research
 
-Until the engine takes a watchlist as an argument, treat the config as the
-intended target rather than the active one. Closing the gap is a one-line change
-in the engine (`research_cycle(watchlist)` and `trading_cycle(watchlist)`, with
-`WATCHLIST` as the default) plus passing `cfg.symbols` and `cfg.interval` from
-`PaperWorker._run_cycle_locked`, which is already the single call site for both.
+A research cycle backtests the whole parameter grid for each symbol on each
+research timeframe, then registers the results that clear the validation bar.
+
+### Timeframes
+
+`research_intervals` (default `5m,15m,1h`) says which timeframes each symbol is
+validated on. They are validated separately and produce separately bound
+strategies, because a 20-period lookback on 15m candles is not the same strategy
+as the same lookback on 5m ones. `interval` is the timeframe the worker trades;
+`research_intervals` is the set it learns on.
+
+A symbol whose candles are missing or too short for one timeframe is **skipped
+and counted**, not raised: a feed that carries 5m and 1h but not 15m is normal,
+and one absent bar series must not abort a cycle. Skips appear in the
+`research_done` decision and in the log.
+
+### The per-cycle cap
+
+`research_max_experiments` (default 300) bounds how many backtests one cycle may
+run. Nine symbols x three timeframes x seven families is more work than a cycle
+should hold, so the grid is cut off rather than allowed to run long.
+
+When the cap bites, the cycle logs `research_capped` with the planned count, the
+number left out, and the cap itself, and says so on the logger. The watchlist is
+**rotated by one symbol per cycle**, so a capped cycle still works its way around
+the whole list rather than leaving the tail of it permanently unresearched.
+
+### Families
+
+Seven families, different in kind rather than in tuning:
+
+| Family | What it looks at |
+| --- | --- |
+| `sma_cross` | Moving-average order |
+| `donchian` | Price at the edge of the recent range |
+| `rsi_revert` | Exhaustion fade on a bounded oscillator |
+| `momentum` | Rate of change |
+| `atr_breakout` | Range break measured in multiples of true range |
+| `volume_trend` | Moving-average trend, taken only when volume confirms it |
+| `zscore_revert` | Band fade on the z-score of price against its average |
+
+Every family is a pure function of the candle list, deterministic and
+stdlib-only, so the same candles always produce the same signal and a result can
+be reproduced exactly. Each has four parameter points in `strategies.PARAM_GRID`.
+
+### The validation bar
+
+A backtest becomes a registered strategy only if it clears all of:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `min_trades` | 2 | Fewest closed trades in the backtest |
+| `min_net_pnl` | 0.0 | Net P&L in account currency, fees included |
+| `max_drawdown_pct` | 5.0 | Peak-to-trough loss as a percentage of the account |
+
+These are config keys, so the bar is explicit rather than buried in the code.
+`engine.passes_validation(metrics)` returns `(passed, reason)` and names the bar
+that failed, so a rejection is readable rather than a bare "invalid".
+
+Two rules the configuration cannot talk its way past:
+
+- **A negative net P&L is never registered as active**, whatever `min_net_pnl`
+  is set to. A losing backtest is the clearest signal there is, and lowering the
+  bar does not turn it into a strategy.
+- The defaults are lower than the old hard-coded bar (`trades >= 3`) on purpose,
+  so a setup that fires twice is still evidence. They are not lowered further
+  than that.
+
+### Strategies are bound to a timeframe
+
+A registered strategy id carries the timeframe it was validated on:
+
+```
+donchian-BTCUSDT-15m
+```
+
+`engine.trading_cycle` parses that id and **skips any strategy whose timeframe is
+not the one currently being traded**, logging how many it skipped. A strategy
+validated before this change has no timeframe in its id and stays tradable,
+because refusing it would silently unregister work an earlier cycle did
+properly.
+
+One consequence worth knowing: `planner._strategies_for` (in `planner.py`, not
+owned by this work) matches a strategy to a symbol by taking everything after the
+first dash in its id, so a timeframe-bound id is invisible to it. To keep the
+planner working, research **also** writes the best validated strategy per family
+and symbol under the legacy `family-SYMBOL` id, marked with the
+`research-symbol-mirror` hypothesis and preferring the timeframe the worker
+actually trades. Those rows carry the same metrics and the planner re-validates
+them on its own bar before anything is traded. The proper fix belongs in
+`planner._strategies_for`, which should parse the timeframe out of the id the way
+`engine.parse_strategy_id` does.
 
 ## Health
 
@@ -150,13 +235,61 @@ Paper worker status
   last error       : none
 ```
 
+## Watching the analyst come back
+
+The analyst gates every trade. When it cannot answer, the planner refuses, which
+is correct and completely silent: an exhausted free allowance stops the system
+and the only symptom is a refusal line in a log nobody is reading. The watcher
+polls it and announces the moment availability flips back.
+
+```sh
+uv run python scripts/jev_watch.py                    # poll every 5 minutes
+uv run python scripts/jev_watch.py --interval 60      # poll every minute
+uv run python scripts/jev_watch.py --once             # one probe, 0 = up, 1 = down
+uv run python scripts/jev_watch.py --max-minutes 120   # stop after two hours
+uv run python scripts/jev_watch.py --no-notify         # journal only, no desktop banner
+```
+
+One line per poll. The line that matters is the flip:
+
+```
+2026-10-03 09:12:41 the analyst is still unavailable. The analyst's free daily allowance is used up, so it cannot review a trade right now. Add credits to the Zen account, or wait for the allowance to reset.
+2026-10-03 17:04:02 the analyst is answering again.
+```
+
+The probe is a fixed, tiny request: one analyst call per interval, which is the
+smallest useful sample of "can it answer right now". Whether it is *useful* stays
+the planner's job.
+
+Two journal rows, and the difference is deliberate.
+
+- `analyst_recovered` is written once per unavailable -> available flip, and
+  raises a macOS desktop notification at the same time. Recovery is the event an
+  operator is waiting on, so it is recorded once and only once.
+- `analyst_still_unavailable` is written at most once an hour while the outage
+  lasts, carrying `jev.failure_reason()` in plain words. An overnight outage
+  leaves a readable handful of rows instead of one row per poll. The hourly
+  budget is read back out of the journal rather than held in memory, so it holds
+  across separate `--once` invocations as well.
+
+```sh
+uv run python -c "import sys; sys.path.insert(0,'.'); from services.paper import db; [print(r['kind'], r['n']) for r in db.conn().execute(\"SELECT kind, COUNT(*) n FROM decisions WHERE kind LIKE 'analyst_%' GROUP BY kind\")]"
+```
+
+A transport failure is the expected case, not an error: it becomes one printed
+line and a reason, never a traceback, and the script keeps polling. The
+notification is best-effort, so a headless or non-macOS host loses the banner and
+keeps the watcher. The first probe answering does *not* count as a recovery --
+there was no known outage to recover from.
+
 ## No live orders
 
 There is no live-order path anywhere in this system.
 
 - `scripts/paper_worker.py` and `services/paper/worker.py` never import a broker.
-  They call `engine.research_cycle()` and `engine.trading_cycle()` and write
-  health rows.
+  They call `engine.research_cycle()` and the planner, and write health rows.
+- `engine.research_cycle()` only reads candles and writes experiments and
+  strategy rows. Nothing in it can place an order.
 - `engine.trading_cycle()` computes a price from the last candle, applies a
   synthetic 2bp slippage and 4bp fee, and inserts the order, the fill and the
   position into SQLite. Nothing leaves the process.
@@ -166,6 +299,7 @@ There is no live-order path anywhere in this system.
   for a score. It has no order capability and returns to the engine only as a
   number.
 - `services/paper/db.py` holds no broker adapter and exposes no order function.
+- `scripts/jev_watch.py` only calls `jev.ask` and appends to `decisions`.
 
 If you ever want this to trade real money, that is a different system, and it
 should be built as one rather than by loosening a switch in here.
