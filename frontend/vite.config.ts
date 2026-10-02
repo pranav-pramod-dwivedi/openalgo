@@ -58,6 +58,17 @@ export default defineConfig({
     // flagging any new app-code chunk that drifts above 1MB.
     chunkSizeWarningLimit: 1100,
     rollupOptions: {
+      // Two entry points, deliberately. PranavPay is the calm, beginner-facing
+      // surface and is not a route inside the OpenAlgo app: it owns the root
+      // path and its own sections, and the only bridge to OpenAlgo is the
+      // "Advanced view" control on its account page. Separate bundles keep the
+      // OpenAlgo charting and strategy code out of a PranavPay visitor's
+      // download, and keep PranavPay's scoped stylesheet (.pp-root) from ever
+      // reaching the OpenAlgo UI.
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        pranavpay: path.resolve(__dirname, 'pranavpay.html'),
+      },
       output: {
         // Split the stable framework libs into their own long-cached chunk
         // so an app-code change doesn't bust react/router/query for returning

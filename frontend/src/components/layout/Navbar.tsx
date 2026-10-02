@@ -1,4 +1,4 @@
-import { BookOpen, LogOut, Menu, Moon, Sun } from 'lucide-react'
+import { BookOpen, LayoutDashboard, LogOut, Menu, Moon, Sun } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { authApi } from '@/api/auth'
@@ -300,6 +300,17 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
                 >
                   <BookOpen className="h-4 w-4" />
                   Docs
+                </a>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {/* PranavPay is the calm, beginner-facing surface and a separate
+                  bundle, so this is a full page load rather than a route
+                  change. Kept in the profile menu, not the main nav, so the
+                  advanced view stays the default here. */}
+              <DropdownMenuItem asChild className="rounded-lg">
+                <a href="/" className="flex items-center gap-2">
+                  <LayoutDashboard className="h-4 w-4" />
+                  Simple view
                 </a>
               </DropdownMenuItem>
               <DropdownMenuSeparator />

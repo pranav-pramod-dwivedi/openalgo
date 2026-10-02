@@ -859,6 +859,29 @@ class BinanceDemoService:
     # ------------------------------------------------------------------
     # Order book — parallel per-symbol, per-venue
     # ------------------------------------------------------------------
+    # Binance order status -> the platform's normalized contract. Every other
+    # broker's mapping/order_data.py emits these words, and the frontend reads
+    # them (status column, status filters, open-order counts). Emitting Binance's
+    # own vocabulary here left every one of those reading undefined.
+    _ORDER_STATUS_MAP = {
+        "NEW": "open",
+        "PARTIALLY_FILLED": "open",
+        "PENDING_NEW": "pending",
+        "FILLED": "complete",
+        "CANCELED": "cancelled",
+        "CANCELLED": "cancelled",
+        "PENDING_CANCEL": "open",
+        "REJECTED": "rejected",
+        "EXPIRED": "cancelled",
+        "EXPIRED_IN_MATCH": "cancelled",
+    }
+
+    def _map_order_status(self, raw: str | None) -> str:
+        """Translate a Binance order status into the platform's vocabulary."""
+        if not raw:
+            return "open"
+        return self._ORDER_STATUS_MAP.get(str(raw).upper(), str(raw).lower())
+
     def get_orderbook_formatted(self) -> List[Dict[str, Any]]:
         """Return orders from Spot and Futures formatted for OpenAlgo orderbook."""
         all_orders: List[Dict] = []
@@ -881,8 +904,15 @@ class BinanceDemoService:
                             "filledqty": float(o.get("executedQty", 0)),
                             "price": float(o.get("price", 0)),
                             "avgprice": float(o.get("avgPrice", 0)),
+                            # Both spellings: order_status is the contract every
+                            # other broker and the frontend use; orderstatus is
+                            # what the statistics counters in orderbook_service
+                            # read. Emitting one broke the other.
+                            "order_status": self._map_order_status(o.get("status")),
                             "orderstatus": o.get("status", "FILLED"),
                             "pricetype": o.get("type", "MARKET"),
+                            "product": "FUTURES",
+                            "trigger_price": float(o.get("stopPrice", 0) or 0),
                             "timestamp": time.strftime(
                                 "%Y-%m-%d %H:%M:%S",
                                 time.localtime(o["time"] / 1000),
@@ -911,8 +941,11 @@ class BinanceDemoService:
                             "filledqty": float(o.get("executedQty", 0)),
                             "price": float(o.get("price", 0)),
                             "avgprice": avg_px,
+                            "order_status": self._map_order_status(o.get("status")),
                             "orderstatus": o.get("status", "FILLED"),
                             "pricetype": o.get("type", "MARKET"),
+                            "product": "SPOT",
+                            "trigger_price": 0.0,
                             "timestamp": time.strftime(
                                 "%Y-%m-%d %H:%M:%S",
                                 time.localtime(o["time"] / 1000),

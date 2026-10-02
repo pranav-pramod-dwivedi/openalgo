@@ -100,6 +100,28 @@ npm run build</pre>
     return response
 
 
+def is_pranavpay_available():
+    """Whether the PranavPay surface has been built alongside the main app."""
+    return FRONTEND_DIST.exists() and (FRONTEND_DIST / "pranavpay.html").exists()
+
+
+def serve_pranavpay():
+    """Serve the PranavPay shell.
+
+    A separate entry point (frontend/pranavpay.html) rather than a route in the
+    main app: PranavPay is the calm, beginner-facing surface and OpenAlgo keeps
+    its own routes. When it has not been built, fall back to the OpenAlgo app
+    so the deployment never serves a blank page at the root.
+    """
+    if not is_pranavpay_available():
+        return serve_react_app()
+    response = send_file(FRONTEND_DIST / "pranavpay.html", mimetype="text/html")
+    # Same reasoning as serve_react_app: the shell points at content-hashed
+    # asset URLs, so it must revalidate rather than be served from cache.
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 # ============================================================
 # Phase 2 Migrated Routes - These are served by React
 # ============================================================
@@ -108,7 +130,35 @@ npm run build</pre>
 # Index/Home route
 @react_bp.route("/")
 def react_index():
-    return serve_react_app()
+    # The root is PranavPay, the beginner-facing surface. OpenAlgo's own
+    # dashboard is untouched and still reachable at /dashboard, and the only
+    # link between the two lives on PranavPay's account page.
+    return serve_pranavpay()
+
+
+# PranavPay's own sections. They are client-side routes in that app, so a
+# direct hit, a refresh or a shared link must be served its shell - otherwise
+# app.py's 404 fallback hands it the OpenAlgo index and the section silently
+# renders the wrong application. Registering them also keeps an unauthenticated
+# visitor's bookmark from counting toward an IP ban (see CLAUDE.md).
+@react_bp.route("/wallet", strict_slashes=False)
+def pranavpay_wallet():
+    return serve_pranavpay()
+
+
+@react_bp.route("/transactions", strict_slashes=False)
+def pranavpay_transactions():
+    return serve_pranavpay()
+
+
+@react_bp.route("/manage", strict_slashes=False)
+def pranavpay_manage():
+    return serve_pranavpay()
+
+
+@react_bp.route("/account", strict_slashes=False)
+def pranavpay_account():
+    return serve_pranavpay()
 
 
 # Login route
