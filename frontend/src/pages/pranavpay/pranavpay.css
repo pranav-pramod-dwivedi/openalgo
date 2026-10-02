@@ -1001,3 +1001,75 @@
   .pp-root .pp-paper-decisions > li { grid-template-columns: 1fr auto; }
   .pp-root .pp-paper-payload { grid-column: 1 / -1; }
 }
+
+/* The planner's latest decision. The refusal is the case that matters most: a
+   declined cycle still has a reason, so the reason is the panel, set large
+   enough to read first. */
+.pp-root .pp-plan-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.pp-root .pp-plan-head strong { font-size: 17px; font-weight: 700; letter-spacing: -.03em; }
+.pp-root .pp-plan-qty { color: var(--muted); font-family: var(--mono); font-size: 9.5px; }
+.pp-root .pp-plan-side {
+  padding: 3px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.pp-root .pp-plan-side.is-buy { color: var(--ink); }
+.pp-root .pp-plan-side.is-sell { color: var(--ink); text-decoration: underline; }
+.pp-root .pp-plan-facts {
+  margin-bottom: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+.pp-root .pp-plan-refusal {
+  margin-bottom: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-strong);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: var(--soft);
+}
+.pp-root .pp-plan-refusal-reason {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -.01em;
+  overflow-wrap: anywhere;
+}
+.pp-root .pp-plan-refusal-note { margin: 8px 0 0; color: var(--muted); font-size: 9.5px; line-height: 1.5; }
+.pp-root .pp-plan-metrics { display: grid; gap: 7px; margin-bottom: 10px; }
+.pp-root .pp-plan-metrics small { color: var(--muted); font-size: 9.5px; line-height: 1.5; }
+.pp-root .pp-why {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+.pp-root .pp-why > summary {
+  padding: 10px 12px;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.pp-root .pp-why[open] > summary { border-bottom: 1px solid var(--line); }
+.pp-root .pp-why-body {
+  margin: 0;
+  padding: 12px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pp-root .pp-why-missing { margin: 0; color: var(--muted); font-size: 9.5px; }

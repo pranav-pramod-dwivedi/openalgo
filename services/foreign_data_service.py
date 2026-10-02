@@ -82,8 +82,14 @@ def set_cached_history(key: str, data: List[Dict[str, Any]]):
         _HISTORY_CACHE[key] = (now, [dict(d) for d in data])
 
 
-def fetch_crypto_quote(symbol: str) -> Dict[str, Any]:
-    """Fetch real-time quote for a crypto instrument."""
+def fetch_crypto_quote(symbol: str) -> Optional[Dict[str, Any]]:
+    """Fetch real-time quote for a crypto instrument.
+
+    Returns None when the live feed could not be reached and no previously
+    fetched quote is still held. A caller must treat None as "price
+    unavailable" and surface that; fabricating a stand-in price silently
+    prices every position at a constant during an outage.
+    """
     cache_key = f"CRYPTO:{symbol.upper()}"
     cached = get_cached_quote(cache_key)
     if cached:
@@ -115,22 +121,11 @@ def fetch_crypto_quote(symbol: str) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Error fetching crypto quote for {symbol} ({binance_sym}): {e}")
 
-    with _CACHE_LOCK:
-        if cache_key in _QUOTE_CACHE:
-            return _QUOTE_CACHE[cache_key][1]
-
-    # Graceful fallback default so server never crashes
-    return {
-        "ltp": 76500.0 if "BTC" in symbol.upper() else (2800.0 if "ETH" in symbol.upper() else 100.0),
-        "open": 76000.0,
-        "high": 77000.0,
-        "low": 75000.0,
-        "volume": 1000,
-        "prev_close": 76000.0,
-        "oi": 0.0,
-        "bid": 76500.0,
-        "ask": 76500.0,
-    }
+    # No live price. Report unavailability rather than invent one: a stale
+    # cached quote is a last-known price, not a live mark, so it is not
+    # returned as if it were current either.
+    logger.warning(f"Crypto quote unavailable for {symbol} ({binance_sym})")
+    return None
 
 
 def _forex_ticker_symbol(symbol: str) -> str:
@@ -241,8 +236,12 @@ def fetch_forex_quote(symbol: str) -> Dict[str, Any]:
     return quote
 
 
-def get_foreign_quote(symbol: str, exchange: str) -> Dict[str, Any]:
-    """Get real-time quote for any foreign instrument."""
+def get_foreign_quote(symbol: str, exchange: str) -> Optional[Dict[str, Any]]:
+    """Get real-time quote for any foreign instrument.
+
+    Returns None when no live price is available. Callers must surface that
+    as unavailable rather than substituting a price of their own.
+    """
     ex = exchange.upper()
     if ex == "CRYPTO":
         return fetch_crypto_quote(symbol)

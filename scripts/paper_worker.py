@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Autonomous permanent paper-trading worker.
 
-Loop: data -> research (backtest grid) -> register -> signals -> paper orders ->
+Loop: data -> research (backtest grid) -> register -> planner -> paper orders ->
 fills -> positions -> equity snapshot -> heartbeat.
+
+Every autonomous cycle goes through ``services.paper.planner``: the worker
+asks for a plan and executes it only when the plan carries no refusal reason
+and the analyst was available. A refused cycle records a ``worker_skipped``
+decision and trades nothing.
 
 State lives in the paper database (``PAPER_DB``, default ``data/paper.db``).
 
@@ -16,6 +21,7 @@ Modes (no flag = the autonomous loop):
     --interval 5m       set the candle timeframe (persisted)
     --monitor-seconds   monitor cadence, default 60
     --research-seconds  research cadence, default 300
+    --max-risk 5        risk budget in USD the planner may commit (persisted)
 
 No live orders: every fill is simulated and stays in this database. See
 PAPER_TRADING.md.
@@ -29,7 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from services.paper import config, db, worker  # noqa: E402
+from services.paper import config, db, engine, worker  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,7 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--status", action="store_true", help="print worker health and exit")
 
     p.add_argument("--symbols", help="comma separated watchlist, e.g. BTCUSDT,SOLUSDT")
-    p.add_argument("--interval", help="candle timeframe, e.g. 1m,5m,15m,1h")
+    p.add_argument(
+        "--interval",
+        choices=list(engine.ALLOWED_INTERVALS),
+        help="candle timeframe, e.g. 1m,5m,15m,1h",
+    )
     p.add_argument(
         "--monitor-seconds",
         type=int,
@@ -54,6 +64,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--research-seconds",
         type=int,
         help=f"research cadence in seconds (default {config.DEFAULT_RESEARCH_SECONDS})",
+    )
+    p.add_argument(
+        "--max-risk",
+        type=float,
+        help=(
+            "risk budget in USD the planner may commit per cycle "
+            f"(default {worker.DEFAULT_MAX_RISK_USD}, persisted)"
+        ),
     )
     p.add_argument("--quiet", action="store_true", help="suppress per-cycle logging")
     return p
@@ -74,6 +92,9 @@ def main(argv: list[str] | None = None) -> int:
             f"[paper_worker] config saved: watchlist {saved.symbols_csv} @ {saved.interval}, "
             f"monitor {saved.monitor_seconds}s, research {saved.research_seconds}s"
         )
+
+    if args.max_risk is not None:
+        print(f"[paper_worker] max risk saved: {worker.set_max_risk(args.max_risk)} USD per plan")
 
     if args.status:
         print(worker.format_status(worker.status()))
@@ -96,6 +117,11 @@ def main(argv: list[str] | None = None) -> int:
             print("[paper_worker] kill switch is set: cycle refused to trade (use --resume)")
         elif result.get("status") == "skipped_busy":
             print("[paper_worker] a cycle was still running, this tick did nothing")
+        elif result.get("planner_verdict") == worker.VERDICT_REFUSED:
+            print(
+                "[paper_worker] the planner refused this cycle, so nothing was traded. "
+                f"Reason: {result.get('refusal_reason')}"
+            )
         print(worker.format_status(worker.status()))
         return 0 if result.get("status") != "error" else 1
 

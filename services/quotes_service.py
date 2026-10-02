@@ -126,9 +126,21 @@ def get_quotes_with_auth(
     if is_foreign_exchange(exchange) and broker != "deltaexchange":
         try:
             quotes = get_foreign_quote(symbol, exchange)
-            return True, {"status": "success", "data": quotes}, 200
         except Exception as e:
-            return False, {"status": "error", "message": f"Failed to fetch foreign quote for {symbol}: {e}"}, 500
+            logger.warning(f"Failed to fetch foreign quote for {symbol}: {e}")
+            quotes = None
+        if quotes is None:
+            # No live price from the upstream feed. Report it rather than
+            # returning a made-up one.
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": f"Live price for {symbol} is unavailable right now. The exchange feed did not respond. Try again shortly.",
+                },
+                503,
+            )
+        return True, {"status": "success", "data": quotes}, 200
 
     from database.settings_db import get_analyze_mode
     if broker == "sandbox" or get_analyze_mode():
@@ -220,9 +232,21 @@ def get_quotes(
     if is_foreign_exchange(exchange) and broker != "deltaexchange":
         try:
             quotes = get_foreign_quote(symbol, exchange)
-            return True, {"status": "success", "data": quotes}, 200
         except Exception as e:
-            return False, {"status": "error", "message": f"Failed to fetch foreign quote for {symbol}: {e}"}, 500
+            logger.warning(f"Failed to fetch foreign quote for {symbol}: {e}")
+            quotes = None
+        if quotes is None:
+            # No live price from the upstream feed. Report it rather than
+            # returning a made-up one.
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": f"Live price for {symbol} is unavailable right now. The exchange feed did not respond. Try again shortly.",
+                },
+                503,
+            )
+        return True, {"status": "success", "data": quotes}, 200
 
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):

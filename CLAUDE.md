@@ -545,3 +545,32 @@ to `main` after every successful push.
 
 Config lives in `.env` (copy from `.sample.env`); `VALID_BROKERS` gates which
 broker plugins load, and plugins are discovered at startup only.
+
+## One-command paper trade
+
+One validated paper trade is one command, and there is exactly one code path:
+
+```bash
+uv run python scripts/profitable_trade.py --symbol BTCUSDT --max-risk 25          # plan
+uv run python scripts/profitable_trade.py --symbol BTCUSDT --max-risk 25 --json   # plan, machine-readable
+uv run python scripts/profitable_trade.py --symbol BTCUSDT --max-risk 25 --yes    # place, after an explicit yes
+```
+
+`/make-profitable-trade [SYMBOL] [MAX_RISK_USD]` wraps it. The agent calls the
+planner **without** `--yes` first, presents symbol, side, qty, entry, stop-loss,
+target, risk USD, reward USD, R:R, the validated strategy plus its backtest
+metrics, the Jev verdict with `p(take)` and analyst availability, and the
+plain-English reasoning — then places nothing until the user says yes, at which
+point it re-runs the same script with `--yes`.
+
+The planner refuses when there is no edge, insufficient paper cash, the exposure
+cap is hit, data is stale, or the analyst is unavailable. A refusal is reported
+verbatim and is never dressed up as a recommendation. The agent may not invent
+prices, sizes, confidence or P&L, may not place an order the planner did not
+produce, and may not call a trade profitable.
+
+This is **paper trading — virtual money** (`data/paper.db`, no broker).
+`scripts/paper_worker.py` calls the identical planner, so the agent and the
+worker never diverge. Rules live in
+`.opencode/skills/profitable-trade/SKILL.md`; engine detail in
+`PAPER_TRADING.md`.

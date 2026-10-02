@@ -43,6 +43,27 @@ def init():
         }
         for k, v in defaults.items():
             c.execute("INSERT OR IGNORE INTO config VALUES(?,?)", (k, v))
+        # ``cash`` is the live balance and the single source of truth for equity.
+        # It is seeded from the configured starting capital the first time only,
+        # so an existing installation keeps its real balance rather than being
+        # reset by the INSERT OR IGNORE above.
+        seeded = c.execute("SELECT v FROM config WHERE k='starting_cash'").fetchone()
+        c.execute(
+            "INSERT OR IGNORE INTO config VALUES('cash',?)",
+            (seeded["v"] if seeded else json.dumps(1000.0),),
+        )
+        c.execute("INSERT OR IGNORE INTO config VALUES('short_margin_locked','0')")
+
+
+def get_cash(existing=None) -> float:
+    """The live cash balance, falling back to the configured starting capital."""
+    cfg = get_all(existing)
+    return float(cfg.get("cash", cfg.get("starting_cash", 1000.0)))
+
+
+def get_margin_locked(existing=None) -> float:
+    """Notional currently posted as margin against open short positions."""
+    return float(get_all(existing).get("short_margin_locked", 0.0))
 
 
 def ensure_column(table: str, column: str, decl: str) -> bool:
@@ -90,6 +111,27 @@ def get(k, default=None):
 def setc(k, v):
     with conn() as c:
         c.execute("INSERT OR REPLACE INTO config VALUES(?,?)", (k, json.dumps(v)))
+
+
+def move_cash(delta: float, existing=None) -> float:
+    """Apply a signed delta to the cash balance and return the new balance.
+
+    Cash is the single source of truth, so every movement goes through here, on
+    the caller's own connection, inside the same transaction as the fill. A delta
+    that would take the balance below zero is refused rather than applied.
+    """
+    cfg = get_all(existing)
+    current = float(cfg.get("cash", cfg.get("starting_cash", 1000.0)))
+    new = round(current + float(delta), 8)
+    if new < 0:
+        raise ValueError("insufficient cash")
+    set_many({"cash": new}, existing)
+    return new
+
+
+def set_margin(locked: float, existing=None) -> None:
+    """Persist the notional held as margin against open short positions."""
+    set_many({"short_margin_locked": round(max(0.0, float(locked)), 8)}, existing)
 
 
 def log(kind, payload, existing=None):
