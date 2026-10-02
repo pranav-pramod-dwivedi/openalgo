@@ -1,6 +1,9 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
-import { PriceChart, PriceTile } from '../PriceChart'
+import { PriceTile } from '../PriceChart'
+import { PnlCalendar } from '../PnlCalendar'
+import { PortfolioChart, type RangeKey } from '../PortfolioChart'
+import { PortfolioFacts } from '../PortfolioFacts'
 import {
   alerts,
   allocation,
@@ -23,30 +26,26 @@ import { CapitalSplit, EmptyNote, LoadingNote, StaleNote, UpdatedAt, useSnapshot
 import { toAmounts } from '../useWalletSnapshot'
 import { liveEquity, liveUnrealised, useLiveMarks, useWatchedMarkets } from '../useLiveMarks'
 
-/** The market the headline chart follows: the largest open position. */
-function chartSymbol(symbols: string[]): string {
-  return symbols[0] ?? 'BTCUSDT'
-}
-
 export default function OverviewPage() {
   const snapshot = useSnapshot()
   const now = useNow()
+  const [range, setRange] = useState<RangeKey>('1M')
   const amounts = toAmounts(snapshot.funds)
   const fills = useMemo(() => toFillRows(snapshot.trades), [snapshot.trades])
   const health = useMemo(() => derive(snapshot), [snapshot])
   const slices = useMemo(() => allocation(snapshot.funds, snapshot.positions), [snapshot])
   const notices = useMemo(() => alerts(snapshot), [snapshot])
   const realisedByDay = useMemo(() => dailyRealised(fills), [fills])
+  const lastSevenDays = useMemo(
+    () =>
+      [...realisedByDay.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .slice(-7)
+        .map(([day, value]) => ({ day, value })),
+    [realisedByDay]
+  )
   const { prices, isLive, isStreaming } = useLiveMarks(snapshot)
   const watched = useWatchedMarkets(snapshot)
-
-  const focus = chartSymbol(
-    useMemo(() => {
-      const held = [...new Set(snapshot.positions.map((position) => position.symbol))]
-      const traded = fills.map((fill) => fill.symbol)
-      return [...held, ...traded, 'BTCUSDT']
-    }, [snapshot.positions, fills])
-  )
 
   const marketSymbols = useMemo(
     () => [...new Set([...snapshot.positions.map((p) => p.symbol), ...watched])].slice(0, 3),
@@ -141,11 +140,20 @@ export default function OverviewPage() {
           </div>
           <div className="balance-footer">
             <UpdatedAt at={snapshot.updatedAt} />
-            <span className="mini-chart" aria-hidden="true">
-              {(marketSymbols.length ? marketSymbols : ['BTCUSDT']).slice(0, 7).map((symbol) => (
-                <i key={symbol} style={{ height: `${20 + ((symbol.charCodeAt(0) % 7) * 9)}%` }} />
-              ))}
-            </span>
+            {lastSevenDays.length > 0 ? (
+              <span className="mini-chart" aria-hidden="true">
+                {lastSevenDays.map((value) => (
+                  <i
+                    key={value.day}
+                    style={{
+                      height: `${12 + Math.min(76, Math.abs(value.value) * 900)}%`,
+                      background: value.value < 0 ? 'transparent' : undefined,
+                      border: value.value < 0 ? '1px solid currentColor' : undefined,
+                    }}
+                  />
+                ))}
+              </span>
+            ) : null}
           </div>
         </article>
 
@@ -182,7 +190,14 @@ export default function OverviewPage() {
 
       <section className="primary-grid">
         <article className="chart-card surface-card">
-          <PriceChart symbol={focus} />
+          <PortfolioChart
+            liveEquityNow={liveTotal}
+            fills={fills}
+            openPositions={snapshot.positions.length}
+            floor={amounts?.floor ?? 0}
+            range={range}
+            onRangeChange={setRange}
+          />
         </article>
 
         <article className="ai-card">
@@ -364,11 +379,19 @@ export default function OverviewPage() {
         <article className="feature-card surface-card signals-card">
           <div className="section-heading compact-heading">
             <div>
-              <span className="card-label">What we can measure</span>
-              <h2>Account state</h2>
+              <span className="card-label">What matters</span>
+              <h2>Portfolio record</h2>
             </div>
             {isLive ? <span className="live-label"><span className="live-dot" /> Live</span> : null}
           </div>
+          <PortfolioFacts
+            fills={fills}
+            byDay={realisedByDay}
+            capitalAtRisk={health.exposureShare}
+            equity={liveTotal}
+            floor={amounts?.floor ?? null}
+            tradable={amounts?.tradable ?? null}
+          />
           <div className="signal-list">
             <div className="signal-row">
               <span>Tradable share</span>
@@ -462,10 +485,6 @@ export default function OverviewPage() {
             </div>
           </div>
           <PnlCalendar byDay={realisedByDay} />
-          <div className="calendar-legend">
-            <span><i className="positive-key" /> Days made money</span>
-            <span><i className="negative-key" /> Days lost money</span>
-          </div>
         </article>
 
         <article className="feature-card surface-card insights-card">
@@ -582,44 +601,6 @@ function AssetName({ symbol }: { symbol: string }) {
         <small>{symbol}</small>
       </span>
     </div>
-  )
-}
-
-/**
- * The trailing 30 days, shaded by whether each day realised a profit or a loss.
- *
- * A month grid was the prototype's shape, but it reads as an empty calendar
- * whenever the account last traded in an earlier month, which is exactly when
- * a trader wants to see the record. Thirty days is the window they ask about.
- */
-function PnlCalendar({ byDay }: { byDay: Map<string, number> }) {
-  const days: Array<{ key: string; pnl?: number }> = []
-  for (let offset = 29; offset >= 0; offset -= 1) {
-    const date = new Date()
-    date.setHours(0, 0, 0, 0)
-    date.setDate(date.getDate() - offset)
-    const key = date.toISOString().slice(0, 10)
-    days.push({ key, pnl: byDay.get(key) })
-  }
-  const traded = days.filter((day) => day.pnl !== undefined).length
-
-  return (
-    <>
-      <div className="calendar-grid pp-strip">
-        {days.map((day) => (
-          <i
-            key={day.key}
-            className={day.pnl === undefined ? 'muted-day' : day.pnl < 0 ? 'loss' : ''}
-            title={`${day.key}: ${day.pnl === undefined ? 'no closed fills' : signedMoney(day.pnl)}`}
-          />
-        ))}
-      </div>
-      <p className="pp-calendar-note">
-        {traded === 0
-          ? 'No closed fills in the last 30 days.'
-          : `${traded} of the last 30 days realised a result.`}
-      </p>
-    </>
   )
 }
 

@@ -23,7 +23,8 @@ export function useWatchedMarkets(snapshot: {
       if (!asset || STABLES.has(asset)) continue
       unique.add(`${asset}USDT`)
     }
-    if (unique.size === 0) unique.add('BTCUSDT')
+    // No fallback symbol: this list is labelled "What you hold", so an
+    // account holding nothing must return nothing rather than borrow BTC.
     return [...unique]
       .filter((symbol) => /^[A-Z0-9]{4,20}$/.test(symbol))
       .slice(0, 12)

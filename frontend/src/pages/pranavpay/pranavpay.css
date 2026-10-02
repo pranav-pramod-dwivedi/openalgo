@@ -549,3 +549,101 @@
 @media (max-width: 760px) {
   .pp-root .feature-grid .markets-card { grid-column: auto; }
 }
+
+/* ---------------------------------------------------------------------------
+ * Portfolio calendar: 30 days, seven boxes per row, three explicit states.
+ * A flat grid of identical boxes cannot be told apart from a broken one, so
+ * "no trade" is drawn as its own thing rather than left blank.
+ * ------------------------------------------------------------------------- */
+
+.pp-root .pp-calendar {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 4px;
+}
+.pp-root .pp-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.pp-root .pp-day-num { font-family: var(--mono); font-size: 10px; font-weight: 500; }
+.pp-root .pp-day-mark { font-family: var(--mono); font-size: 8px; color: var(--muted); }
+
+/* A day that made money. */
+.pp-root .pp-day.is-gain { border-color: var(--ink); background: var(--ink); }
+.pp-root .pp-day.is-gain .pp-day-num,
+.pp-root .pp-day.is-gain .pp-day-mark { color: #fff; }
+
+/* A day that lost money: outlined, so the two never read as the same fill. */
+.pp-root .pp-day.is-loss { border-color: var(--ink); background: transparent; }
+.pp-root .pp-day.is-loss .pp-day-num { color: var(--ink); }
+
+/* No trade. */
+.pp-root .pp-day.is-quiet { border-style: dashed; background: var(--paper); }
+.pp-root .pp-day.is-quiet .pp-day-num { color: var(--muted); }
+
+.pp-root .pp-day.is-today { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+.pp-root .calendar-legend .quiet-key { border: 1px dashed var(--line-strong); background: var(--paper); }
+
+/* Portfolio figures, stated as value + basis so each row can be checked. */
+.pp-root .pp-facts { display: grid; gap: 0; }
+.pp-root .pp-facts-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 10px;
+  padding: 11px 0;
+  border-top: 1px solid var(--line);
+}
+.pp-root .pp-facts-row:first-child { border-top: 0; padding-top: 0; }
+.pp-root .pp-facts-row > span { color: var(--muted); font-size: 9px; }
+.pp-root .pp-facts-row > strong {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.pp-root .pp-facts-row > small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.pp-root .pp-chart-foot {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .pp-root .pp-calendar { gap: 4px; }
+  .pp-root .pp-day { border-radius: 6px; }
+  .pp-root .pp-day-num { font-size: 9px; }
+}
+
+/* The savings floor, drawn as the reference the account works against. */
+.pp-root .pp-chart .chart-floor-line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: .35;
+  vector-effect: non-scaling-stroke;
+}
+.pp-root .pp-chart .chart-floor-label {
+  fill: var(--muted);
+  font-family: var(--mono);
+  font-size: 3.4px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
