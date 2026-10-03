@@ -1,4 +1,5 @@
 import { useThemeStore } from '@/stores/themeStore'
+import { SnapshotProvider } from './pranavpay/components'
 import PaperTrading from './pranavpay/pages/PaperPage'
 import './pranavpay/pranavpay.css'
 
@@ -21,7 +22,11 @@ export default function Paper() {
 
   return (
     <div className="pp-root" data-theme={mode === 'dark' ? 'dark' : 'light'}>
-      <PaperTrading />
+      {/* The main app shell has no PranavPay outlet, so the page is handed its
+          own snapshot here rather than reading one that was never provided. */}
+      <SnapshotProvider>
+        <PaperTrading />
+      </SnapshotProvider>
     </div>
   )
 }

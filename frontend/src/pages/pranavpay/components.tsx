@@ -1,11 +1,96 @@
+import { createContext, type ReactNode, useContext, useMemo } from 'react'
 import { useOutletContext } from 'react-router'
 import { ACCOUNT_LABEL, NOT_REPORTED, type PaperAccount, SANDBOX_LABEL } from './account'
 import { assetGlyph, money, qty, relativeTime } from './derive'
-import { type SandboxAmounts, sandboxAmounts, type WalletSnapshot } from './useWalletSnapshot'
+import {
+  type AccountSnapshot,
+  type SandboxAmounts,
+  sandboxAmounts,
+  useWalletSnapshot,
+  type WalletSnapshot,
+} from './useWalletSnapshot'
+
+/**
+ * The snapshot every page reads.
+ *
+ * Two ways in, and both are deliberate. Inside PranavPay the shell fetches once
+ * and hands it down through the outlet. In the main OpenAlgo shell there is no
+ * such outlet, and reading one anyway returned undefined, which took the whole
+ * page down with a destructuring error rather than an honest empty state. So a
+ * surface that is not inside the PranavPay outlet falls back to its own fetch,
+ * and a snapshot that is somehow still missing resolves to an explicit
+ * "nothing to report" object: a page must never crash on absent data.
+ */
+const SnapshotContext = createContext<WalletSnapshot | null>(null)
+
+export function SnapshotProvider({
+  children,
+  snapshot,
+}: {
+  children: ReactNode
+  snapshot?: WalletSnapshot
+}) {
+  // useWalletSnapshot is several hooks, so it is called unconditionally and
+  // then discarded when the caller supplies a snapshot of its own. Calling it
+  // inside useMemo would make hook order depend on the prop.
+  const fetched = useWalletSnapshot()
+  const value = useMemo(() => snapshot ?? fetched, [snapshot, fetched])
+  return <SnapshotContext.Provider value={value}>{children}</SnapshotContext.Provider>
+}
+
+/**
+ * A fully-shaped snapshot with nothing in it.
+ *
+ * Built field by field rather than cast, so a missing snapshot renders as an
+ * honest "nothing to report" and a future field cannot slip through unchecked.
+ */
+const EMPTY_ACCOUNT: AccountSnapshot = {
+  state: {
+    starting_cash: 0,
+    cash: 0,
+    virtual_balance: 0,
+    short_margin_locked: 0,
+    equity: 0,
+    realized: 0,
+    unrealized: 0,
+    fees: 0,
+    peak_equity: 0,
+    drawdown: 0,
+    positions: [],
+    fills: [],
+    equity_curve: [],
+    strategies: [],
+    experiment_count: 0,
+    worker: null,
+    decisions: [],
+    jev_verdicts: 0,
+    generated_at: 0,
+  },
+  loading: true,
+  stale: false,
+  error: null,
+  updatedAt: null,
+  refresh: () => {},
+  figures: null,
+}
+
+const EMPTY_SNAPSHOT: WalletSnapshot = {
+  account: EMPTY_ACCOUNT,
+  sandbox: {
+    funds: null,
+    updatedAt: null,
+    loading: true,
+    stale: false,
+    error: null,
+    refresh: () => {},
+  },
+}
 
 /** Every page reads the one snapshot the shell fetched. */
 export function useSnapshot(): WalletSnapshot {
-  return useOutletContext<WalletSnapshot>()
+  const fromOutlet = useOutletContext<WalletSnapshot | undefined>()
+  const fromContext = useContext(SnapshotContext)
+  return fromOutlet ?? fromContext ?? EMPTY_SNAPSHOT
 }
 
 /**
