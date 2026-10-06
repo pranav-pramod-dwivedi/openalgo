@@ -54,6 +54,19 @@ See [SCALPER.md](SCALPER.md) for full setup and options.
 - **Why OpenAlgo**: [Why Build with OpenAlgo](https://docs.openalgo.in/why-to-build-with-openalgo)
 
 
+## Frontend Development Checks
+
+Frontend development uses Node.js 20.20+, 22.22+, or 24.13+ and the scripts in `frontend/package.json`.
+
+```bash
+cd frontend
+npm run test:run
+npm run build
+npm run lint
+```
+
+Use `npm run test:run` for a deterministic test run; `npm run test` starts Vitest in interactive/watch mode.
+
 ## Python Compatibility
 
 **Requires Python 3.12 or newer.**
